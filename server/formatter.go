@@ -1,0 +1,119 @@
+package main
+
+import (
+	"fmt"
+
+	"github.com/mattermost/mattermost/server/public/model"
+	"github.com/dubuq/mattermost-plugin-yandex-tracker/server/tracker"
+)
+
+// StatusColors holds the sidebar colors for each status group. Defaults are in configuration.go.
+type StatusColors struct {
+	Active    string // In Progress, In Review
+	Done      string // Closed, Resolved, Released
+	Cancelled string // Cancelled, Won't fix, Duplicate
+	Default   string // Open, To Do, and anything unrecognised
+}
+
+// Formatter converts tracker domain types into Mattermost post attachments.
+type Formatter struct {
+	pluginID string
+}
+
+func NewFormatter(pluginID string) *Formatter {
+	return &Formatter{pluginID: pluginID}
+}
+
+const emptyFieldValue = "—"
+
+// BuildAttachment converts an issue into an inline post attachment.
+// collapsed=true shows only Status+Assignee; false shows all fields.
+func (f *Formatter) BuildAttachment(issue *tracker.Issue, sidebarColor string, t Translations, collapsed bool) *model.SlackAttachment {
+	status := issue.Status
+	if status == "" {
+		status = emptyFieldValue
+	}
+	assignee := issue.Assignee
+	if assignee == "" {
+		assignee = emptyFieldValue
+	}
+
+	fields := []*model.SlackAttachmentField{
+		{Title: t.StatusLabel, Value: status, Short: true},
+		{Title: t.AssigneeLabel, Value: assignee, Short: true},
+	}
+
+	if !collapsed {
+		issueType := issue.Type
+		if issueType == "" {
+			issueType = emptyFieldValue
+		}
+		priority := issue.Priority
+		if priority == "" {
+			priority = emptyFieldValue
+		}
+		fields = append(fields,
+			&model.SlackAttachmentField{Title: t.TypeLabel, Value: issueType, Short: true},
+			&model.SlackAttachmentField{Title: t.PriorityLabel, Value: priority, Short: true},
+		)
+	}
+
+	toggleName := t.ExpandButton
+	toggleURL := fmt.Sprintf("/plugins/%s/expand", f.pluginID)
+	if !collapsed {
+		toggleName = t.CollapseButton
+		toggleURL = fmt.Sprintf("/plugins/%s/collapse", f.pluginID)
+	}
+
+	actions := []*model.PostAction{
+		{
+			Name: t.DismissButton,
+			Type: model.PostActionTypeButton,
+			Integration: &model.PostActionIntegration{
+				URL:     fmt.Sprintf("/plugins/%s/dismiss", f.pluginID),
+				Context: map[string]interface{}{"issue_key": issue.Key},
+			},
+		},
+		{
+			Name: toggleName,
+			Type: model.PostActionTypeButton,
+			Integration: &model.PostActionIntegration{
+				URL:     toggleURL,
+				Context: map[string]interface{}{"issue_key": issue.Key},
+			},
+		},
+		{
+			Name: t.RefreshButton,
+			Type: model.PostActionTypeButton,
+			Integration: &model.PostActionIntegration{
+				URL:     fmt.Sprintf("/plugins/%s/refresh", f.pluginID),
+				Context: map[string]interface{}{"issue_key": issue.Key},
+			},
+		},
+		{
+			Name: t.AssignToMeButton,
+			Type: model.PostActionTypeButton,
+			Integration: &model.PostActionIntegration{
+				URL:     fmt.Sprintf("/plugins/%s/assign", f.pluginID),
+				Context: map[string]interface{}{"issue_key": issue.Key},
+			},
+		},
+		{
+			Name: t.ChangeStatusButton,
+			Type: model.PostActionTypeButton,
+			Integration: &model.PostActionIntegration{
+				URL:     fmt.Sprintf("/plugins/%s/change-status", f.pluginID),
+				Context: map[string]interface{}{"issue_key": issue.Key},
+			},
+		},
+	}
+
+	return &model.SlackAttachment{
+		Color:     sidebarColor,
+		Title:     fmt.Sprintf("%s: %s", issue.Key, issue.Summary),
+		TitleLink: issue.URL,
+		Fields:    fields,
+		Actions:   actions,
+	}
+}
+

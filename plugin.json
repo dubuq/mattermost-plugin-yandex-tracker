@@ -1,0 +1,152 @@
+{
+  "id": "com.yandex-tracker-mattermost",
+  "name": "Yandex Tracker",
+  "description": "Yandex Tracker integration for Mattermost — issue previews and webhook notifications.",
+  "version": "0.1.0",
+  "min_server_version": "9.0.0",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64",
+      "darwin-amd64": "server/dist/plugin-darwin-amd64",
+      "darwin-arm64": "server/dist/plugin-darwin-arm64",
+      "windows-amd64": "server/dist/plugin-windows-amd64.exe"
+    }
+  },
+  "webapp": {
+    "bundle_path": "webapp/dist/main.js"
+  },
+  "settings_schema": {
+    "header": "Configure the connection to your Yandex Tracker organization.",
+    "footer": "",
+    "settings": [
+      {
+        "key": "WebhookInfo",
+        "display_name": "Webhook",
+        "type": "custom"
+      },
+      {
+        "key": "TrackerToken",
+        "display_name": "Yandex Tracker Token",
+        "type": "text",
+        "help_text": "IAM token or OAuth token for Yandex Tracker API access.",
+        "placeholder": "y0_...",
+        "secret": true
+      },
+      {
+        "key": "OrgID",
+        "display_name": "Organization ID",
+        "type": "text",
+        "help_text": "Your Yandex Cloud organization ID (found in Yandex Cloud Console).",
+        "placeholder": ""
+      },
+      {
+        "key": "WebhookSecret",
+        "display_name": "Webhook Secret",
+        "type": "text",
+        "help_text": "Shared secret for validating incoming webhook requests from Yandex Tracker. Set the same value in Yandex Tracker webhook settings.",
+        "secret": true
+      },
+      {
+        "key": "BotDisplayName",
+        "display_name": "Bot Display Name",
+        "type": "text",
+        "help_text": "Display name for the Tracker bot user in Mattermost.",
+        "default": "Tracker Bot"
+      },
+      {
+        "key": "MonitorAllChannels",
+        "display_name": "Monitor All Channels",
+        "type": "bool",
+        "help_text": "When enabled, the plugin detects issue keys in all channels. When disabled, only channels where the bot has been added as a member.",
+        "default": false
+      },
+      {
+        "key": "BackgroundRefreshHours",
+        "display_name": "Background Card Refresh Interval",
+        "type": "dropdown",
+        "help_text": "How often to re-fetch all tracked issues and update their cards in case webhooks were missed. Set to Disabled if you rely entirely on webhooks.",
+        "default": "6",
+        "options": [
+          {"display_name": "Disabled", "value": "0"},
+          {"display_name": "Every 1 hour", "value": "1"},
+          {"display_name": "Every 2 hours", "value": "2"},
+          {"display_name": "Every 4 hours", "value": "4"},
+          {"display_name": "Every 6 hours (default)", "value": "6"},
+          {"display_name": "Every 12 hours", "value": "12"},
+          {"display_name": "Every 24 hours", "value": "24"}
+        ]
+      },
+      {
+        "key": "ColorActive",
+        "display_name": "Card Color — Active",
+        "type": "text",
+        "help_text": "Hex color for the Active status group. Example: #1E88E5. Leave blank to use the default.",
+        "placeholder": "#1E88E5"
+      },
+      {
+        "key": "StatusesActive",
+        "display_name": "Statuses — Active",
+        "type": "text",
+        "help_text": "Comma-separated status names that use the Active color. Case-insensitive. Example: In Progress, В работе, Выполняется",
+        "placeholder": "In Progress, In Review, В работе"
+      },
+      {
+        "key": "ColorDone",
+        "display_name": "Card Color — Done",
+        "type": "text",
+        "help_text": "Hex color for the Done status group. Example: #43A047. Leave blank to use the default.",
+        "placeholder": "#43A047"
+      },
+      {
+        "key": "StatusesDone",
+        "display_name": "Statuses — Done",
+        "type": "text",
+        "help_text": "Comma-separated status names that use the Done color. Case-insensitive. Example: Closed, Resolved, Закрыт",
+        "placeholder": "Closed, Resolved, Released, Закрыт"
+      },
+      {
+        "key": "ColorCancelled",
+        "display_name": "Card Color — Cancelled",
+        "type": "text",
+        "help_text": "Hex color for the Cancelled status group. Example: #E53935. Leave blank to use the default.",
+        "placeholder": "#E53935"
+      },
+      {
+        "key": "StatusesCancelled",
+        "display_name": "Statuses — Cancelled",
+        "type": "text",
+        "help_text": "Comma-separated status names that use the Cancelled color. Case-insensitive. Example: Cancelled, Won't fix, Отменён",
+        "placeholder": "Cancelled, Won't fix, Duplicate, Отменён"
+      },
+      {
+        "key": "ColorDefault",
+        "display_name": "Card Color — Default",
+        "type": "text",
+        "help_text": "Hex color for any status not matched by the groups above. Example: #AAAAAA. Leave blank to use the default.",
+        "placeholder": "#AAAAAA"
+      },
+      {
+        "key": "ColorCustom",
+        "display_name": "Card Color — Custom",
+        "type": "text",
+        "help_text": "Optional 5th color slot. Set a hex color and fill in Statuses — Custom below. Leave blank to disable.",
+        "placeholder": "#9C27B0"
+      },
+      {
+        "key": "StatusesCustom",
+        "display_name": "Statuses — Custom",
+        "type": "text",
+        "help_text": "Comma-separated status names that use the Custom color. Has no effect if Custom Color is blank.",
+        "placeholder": "On Hold, Paused, На паузе"
+      },
+      {
+        "key": "RequiredFieldsByTransition",
+        "display_name": "Required Fields by Transition",
+        "type": "longtext",
+        "help_text": "JSON object mapping transition names to required fields. Transition names are matched case-insensitively. Each field is an object of {\"Display Label\": \"apiKey\"} pairs shown as a dropdown, or {} for a free-text input. Example: {\"Закрыть\": {\"resolution\": {\"Решено\": \"fixed\", \"Не будет исправлено\": \"wontFix\", \"Дубликат\": \"duplicate\"}}, \"Закрыть (комментарий)\": {\"resolution\": {\"Решено\": \"fixed\"}, \"comment\": {}}}",
+        "placeholder": "{}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+# Build artifacts
+dist/
+build/
+server/dist/
+webapp/dist/
+
+# Plugin bundles
+*.tar.gz
+
+# Node
+node_modules/
+yarn-error.log
+.yarn/
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Local dev
+docker-compose*.yml
+.env
+.env.*
+ngrok.yml
+ngrok.log
