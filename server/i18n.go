@@ -23,12 +23,15 @@ type Translations struct {
 	AssignToMeButton   string
 	ChangeStatusButton string
 
-	// Interactive dialog strings for Assign and Change Status actions.
-	// AssignDialogTitle args: (issueKey)
-	AssignDialogTitle  string
-	AssignDialogSubmit string
-	AssignLoginLabel   string
-	AssignLoginHelp    string
+	// Per-user connection strings. Write actions are only performed with the
+	// user's own Tracker account, never the service account.
+	ConnectPrompt   string // shown when a non-connected user clicks a write action
+	ReconnectPrompt string // shown when the stored token is rejected (expired/revoked)
+	// AssignedToYou args: (issueKey); AssignFailed args: (issueKey, error)
+	AssignedToYou string
+	AssignFailed  string
+
+	// Interactive dialog strings for the Change Status action.
 	// StatusDialogTitle args: (issueKey)
 	StatusDialogTitle  string
 	StatusDialogSubmit string
@@ -57,10 +60,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s assigned to %s",
 		AssignToMeButton:          "Assign to me",
 		ChangeStatusButton:        "Change Status",
-		AssignDialogTitle:         "Assign %s to me",
-		AssignDialogSubmit:        "Assign",
-		AssignLoginLabel:          "Yandex Tracker Login",
-		AssignLoginHelp:           "Your Yandex Tracker username (login). Saved after first use.",
+		ConnectPrompt:             "This action requires your personal Yandex Tracker account. Connect it by typing `/tracker connect`.",
+		ReconnectPrompt:           "Your Yandex Tracker authorization has expired or was revoked. Reconnect by typing `/tracker connect`.",
+		AssignedToYou:             "%s is now assigned to you.",
+		AssignFailed:              "Failed to assign %s: %s",
 		StatusDialogTitle:         "Change Status: %s",
 		StatusDialogSubmit:        "Change",
 		StatusFieldLabel:          "New Status",
@@ -82,10 +85,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s назначен: %s",
 		AssignToMeButton:          "Назначить мне",
 		ChangeStatusButton:        "Изменить статус",
-		AssignDialogTitle:         "Назначить %s на меня",
-		AssignDialogSubmit:        "Назначить",
-		AssignLoginLabel:          "Логин в Яндекс Трекере",
-		AssignLoginHelp:           "Ваш логин в Яндекс Трекере. Сохраняется после первого использования.",
+		ConnectPrompt:             "Для этого действия нужен ваш личный аккаунт Яндекс Трекера. Подключите его командой `/tracker connect`.",
+		ReconnectPrompt:           "Авторизация в Яндекс Трекере истекла или была отозвана. Подключитесь заново командой `/tracker connect`.",
+		AssignedToYou:             "%s теперь назначена на вас.",
+		AssignFailed:              "Не удалось назначить %s: %s",
 		StatusDialogTitle:         "Изменить статус: %s",
 		StatusDialogSubmit:        "Изменить",
 		StatusFieldLabel:          "Новый статус",
@@ -107,10 +110,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s zugewiesen an %s",
 		AssignToMeButton:          "Mir zuweisen",
 		ChangeStatusButton:        "Status ändern",
-		AssignDialogTitle:         "%s mir zuweisen",
-		AssignDialogSubmit:        "Zuweisen",
-		AssignLoginLabel:          "Yandex Tracker Login",
-		AssignLoginHelp:           "Ihr Yandex Tracker Benutzername (Login). Wird nach der ersten Verwendung gespeichert.",
+		ConnectPrompt:             "Diese Aktion erfordert Ihr persönliches Yandex-Tracker-Konto. Verbinden Sie es mit `/tracker connect`.",
+		ReconnectPrompt:           "Ihre Yandex-Tracker-Autorisierung ist abgelaufen oder wurde widerrufen. Verbinden Sie sich erneut mit `/tracker connect`.",
+		AssignedToYou:             "%s ist Ihnen jetzt zugewiesen.",
+		AssignFailed:              "Zuweisung von %s fehlgeschlagen: %s",
 		StatusDialogTitle:         "Status ändern: %s",
 		StatusDialogSubmit:        "Ändern",
 		StatusFieldLabel:          "Neuer Status",
@@ -132,10 +135,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s assigné à %s",
 		AssignToMeButton:          "M'assigner",
 		ChangeStatusButton:        "Changer le statut",
-		AssignDialogTitle:         "M'assigner %s",
-		AssignDialogSubmit:        "Assigner",
-		AssignLoginLabel:          "Identifiant Yandex Tracker",
-		AssignLoginHelp:           "Votre identifiant Yandex Tracker. Enregistré après la première utilisation.",
+		ConnectPrompt:             "Cette action nécessite votre compte Yandex Tracker personnel. Connectez-le avec `/tracker connect`.",
+		ReconnectPrompt:           "Votre autorisation Yandex Tracker a expiré ou a été révoquée. Reconnectez-vous avec `/tracker connect`.",
+		AssignedToYou:             "%s vous est maintenant assigné.",
+		AssignFailed:              "Échec de l'assignation de %s : %s",
 		StatusDialogTitle:         "Changer le statut : %s",
 		StatusDialogSubmit:        "Changer",
 		StatusFieldLabel:          "Nouveau statut",
@@ -157,10 +160,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s asignado a %s",
 		AssignToMeButton:          "Asignarme",
 		ChangeStatusButton:        "Cambiar estado",
-		AssignDialogTitle:         "Asignarme %s",
-		AssignDialogSubmit:        "Asignar",
-		AssignLoginLabel:          "Login de Yandex Tracker",
-		AssignLoginHelp:           "Tu nombre de usuario en Yandex Tracker. Se guarda tras el primer uso.",
+		ConnectPrompt:             "Esta acción requiere tu cuenta personal de Yandex Tracker. Conéctala con `/tracker connect`.",
+		ReconnectPrompt:           "Tu autorización de Yandex Tracker ha caducado o ha sido revocada. Vuelve a conectarte con `/tracker connect`.",
+		AssignedToYou:             "%s ahora está asignado a ti.",
+		AssignFailed:              "No se pudo asignar %s: %s",
 		StatusDialogTitle:         "Cambiar estado: %s",
 		StatusDialogSubmit:        "Cambiar",
 		StatusFieldLabel:          "Nuevo estado",
@@ -182,10 +185,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s przypisano do %s",
 		AssignToMeButton:          "Przypisz do mnie",
 		ChangeStatusButton:        "Zmień status",
-		AssignDialogTitle:         "Przypisz %s do mnie",
-		AssignDialogSubmit:        "Przypisz",
-		AssignLoginLabel:          "Login w Yandex Tracker",
-		AssignLoginHelp:           "Twoja nazwa użytkownika w Yandex Tracker. Zapisywana po pierwszym użyciu.",
+		ConnectPrompt:             "Ta akcja wymaga Twojego osobistego konta Yandex Tracker. Połącz je komendą `/tracker connect`.",
+		ReconnectPrompt:           "Twoja autoryzacja Yandex Tracker wygasła lub została cofnięta. Połącz się ponownie komendą `/tracker connect`.",
+		AssignedToYou:             "%s jest teraz przypisane do Ciebie.",
+		AssignFailed:              "Nie udało się przypisać %s: %s",
 		StatusDialogTitle:         "Zmień status: %s",
 		StatusDialogSubmit:        "Zmień",
 		StatusFieldLabel:          "Nowy status",
@@ -207,10 +210,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s призначено: %s",
 		AssignToMeButton:          "Призначити мені",
 		ChangeStatusButton:        "Змінити статус",
-		AssignDialogTitle:         "Призначити %s на мене",
-		AssignDialogSubmit:        "Призначити",
-		AssignLoginLabel:          "Логін у Яндекс Трекері",
-		AssignLoginHelp:           "Ваш логін у Яндекс Трекері. Зберігається після першого використування.",
+		ConnectPrompt:             "Для цієї дії потрібен ваш особистий акаунт Яндекс Трекера. Підключіть його командою `/tracker connect`.",
+		ReconnectPrompt:           "Авторизація в Яндекс Трекері закінчилася або була відкликана. Підключіться знову командою `/tracker connect`.",
+		AssignedToYou:             "%s тепер призначено на вас.",
+		AssignFailed:              "Не вдалося призначити %s: %s",
 		StatusDialogTitle:         "Змінити статус: %s",
 		StatusDialogSubmit:        "Змінити",
 		StatusFieldLabel:          "Новий статус",
@@ -232,10 +235,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s орындаушысы: %s",
 		AssignToMeButton:          "Маған тағайындау",
 		ChangeStatusButton:        "Мәртебені өзгерту",
-		AssignDialogTitle:         "%s маған тағайындау",
-		AssignDialogSubmit:        "Тағайындау",
-		AssignLoginLabel:          "Яндекс Трекер логині",
-		AssignLoginHelp:           "Яндекс Трекердегі пайдаланушы атыңыз. Бірінші пайдаланудан кейін сақталады.",
+		ConnectPrompt:             "Бұл әрекет үшін жеке Яндекс Трекер аккаунтыңыз қажет. Оны `/tracker connect` пәрменімен қосыңыз.",
+		ReconnectPrompt:           "Яндекс Трекердегі авторизация мерзімі өтті немесе кері қайтарылды. `/tracker connect` пәрменімен қайта қосылыңыз.",
+		AssignedToYou:             "%s енді сізге тағайындалды.",
+		AssignFailed:              "%s тағайындау сәтсіз аяқталды: %s",
 		StatusDialogTitle:         "Мәртебені өзгерту: %s",
 		StatusDialogSubmit:        "Өзгерту",
 		StatusFieldLabel:          "Жаңа мәртебе",
@@ -257,10 +260,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s ijrochisi: %s",
 		AssignToMeButton:          "Menga belgilash",
 		ChangeStatusButton:        "Holat o'zgartirish",
-		AssignDialogTitle:         "%s ni menga belgilash",
-		AssignDialogSubmit:        "Belgilash",
-		AssignLoginLabel:          "Yandex Tracker logini",
-		AssignLoginHelp:           "Yandex Treker foydalanuvchi nomingiz. Birinchi foydalanishdan keyin saqlanadi.",
+		ConnectPrompt:             "Bu amal uchun shaxsiy Yandex Tracker akkauntingiz kerak. Uni `/tracker connect` buyrug'i bilan ulang.",
+		ReconnectPrompt:           "Yandex Tracker avtorizatsiyasi muddati tugagan yoki bekor qilingan. `/tracker connect` buyrug'i bilan qayta ulaning.",
+		AssignedToYou:             "%s endi sizga belgilandi.",
+		AssignFailed:              "%s ni belgilash muvaffaqiyatsiz tugadi: %s",
 		StatusDialogTitle:         "Holatni o'zgartirish: %s",
 		StatusDialogSubmit:        "O'zgartirish",
 		StatusFieldLabel:          "Yangi holat",
@@ -282,10 +285,10 @@ var supportedLanguages = map[string]Translations{
 		AssignmentNotification:    "%s atandı: %s",
 		AssignToMeButton:          "Bana ata",
 		ChangeStatusButton:        "Durumu değiştir",
-		AssignDialogTitle:         "%s bana ata",
-		AssignDialogSubmit:        "Ata",
-		AssignLoginLabel:          "Yandex Tracker Girişi",
-		AssignLoginHelp:           "Yandex Tracker kullanıcı adınız. İlk kullanımdan sonra kaydedilir.",
+		ConnectPrompt:             "Bu işlem kişisel Yandex Tracker hesabınızı gerektirir. `/tracker connect` komutuyla bağlayın.",
+		ReconnectPrompt:           "Yandex Tracker yetkilendirmenizin süresi doldu veya iptal edildi. `/tracker connect` komutuyla yeniden bağlanın.",
+		AssignedToYou:             "%s artık size atandı.",
+		AssignFailed:              "%s ataması başarısız oldu: %s",
 		StatusDialogTitle:         "Durumu değiştir: %s",
 		StatusDialogSubmit:        "Değiştir",
 		StatusFieldLabel:          "Yeni durum",
@@ -304,6 +307,16 @@ func (p *Plugin) translations() Translations {
 		return translationsForLocale(*cfg.LocalizationSettings.DefaultClientLocale)
 	}
 	return supportedLanguages["en"]
+}
+
+// translationsForUser returns Translations in the given MM user's locale,
+// falling back to English when the user cannot be loaded.
+func (p *Plugin) translationsForUser(userID string) Translations {
+	var locale string
+	if user, appErr := p.API.GetUser(userID); appErr == nil {
+		locale = user.Locale
+	}
+	return translationsForLocale(locale)
 }
 
 // translationsForLocale returns Translations for a raw locale string (e.g. "ru", "ru-RU").

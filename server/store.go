@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -20,6 +23,9 @@ const (
 	kvPrefixSubscription  = "subscription:"
 	kvPrefixLastStatus    = "laststatus:"
 	kvPrefixUserLogin     = "userlogin:"
+	kvPrefixUserToken     = "usertoken:"    // userID → encrypted UserConnection JSON
+	kvPrefixOAuthState    = "oauthstate:"   // state → userID (TTL oauthStateTTLSecs)
+	kvKeyEncryptionKey    = "token_encryption_key"
 	kvPrefixPostKeys      = "postkeys:"   // postID → []issueKey
 	kvPrefixPostAttach    = "posta:"      // postID:issueKey → SlackAttachment JSON
 	kvPrefixPending       = "pending:"      // userID → PendingTransition JSON
@@ -31,6 +37,7 @@ const (
 	transCacheTTLSecs     = 60               // seconds; warms the change-status dialog on first click so trigger ID doesn't expire
 	notifCacheTTLSecs     = 10               // seconds; suppresses duplicate webhook retries from Yandex Tracker (retries arrive within 1-3s)
 	pendingTTLSecs        = 5 * 60           // seconds; how long a pending transition is kept while the user fills fields
+	oauthStateTTLSecs     = 10 * 60          // seconds; window for the user to complete the OAuth consent flow
 	issuePostsCap         = 50               // max posts tracked per issue key
 	subscriptionsCap      = 100              // max channels per queue subscription
 )
@@ -43,10 +50,146 @@ type IssuePost struct {
 
 type Store struct {
 	api plugin.API
+
+	// encryptionKey encrypts per-user OAuth tokens at rest in the KV store.
+	// Set once at activation via loadEncryptionKey; nil disables token storage.
+	encryptionKey []byte
 }
 
 func NewStore(api plugin.API) *Store {
 	return &Store{api: api}
+}
+
+// loadEncryptionKey loads the AES key used for user tokens, generating and
+// persisting a new one on first activation.
+//
+// Threat model: the key lives in the same KV store as the ciphertext it
+// protects, so an attacker with read access to the plugin KV store can decrypt
+// tokens. Encryption here defends against exposure paths that don't include KV
+// reads — e.g. raw DB backups filtered to the token rows, or logs — not against
+// a full KV compromise. Separating the key (e.g. deriving it from a server-held
+// secret) would harden this further.
+func (s *Store) loadEncryptionKey() error {
+	data, appErr := s.api.KVGet(kvKeyEncryptionKey)
+	if appErr != nil {
+		return fmt.Errorf("KVGet: %s", appErr.Error())
+	}
+	if len(data) == 32 {
+		s.encryptionKey = data
+		return nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("generate key: %w", err)
+	}
+	if appErr := s.api.KVSet(kvKeyEncryptionKey, key); appErr != nil {
+		return fmt.Errorf("KVSet: %s", appErr.Error())
+	}
+	s.encryptionKey = key
+	return nil
+}
+
+func (s *Store) encrypt(plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(s.encryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func (s *Store) decrypt(data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(s.encryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) < gcm.NonceSize() {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	return gcm.Open(nil, data[:gcm.NonceSize()], data[gcm.NonceSize():], nil)
+}
+
+// UserConnection holds a user's personal Yandex Tracker OAuth credentials.
+type UserConnection struct {
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	Login        string `json:"login"`     // Tracker login, fetched via /myself at connect time
+	ExpiresAt    int64  `json:"expiresAt"` // Unix seconds; 0 = unknown
+}
+
+// SetUserConnection stores a user's Tracker connection, encrypted at rest.
+func (s *Store) SetUserConnection(userID string, conn *UserConnection) error {
+	if s.encryptionKey == nil {
+		return fmt.Errorf("encryption key not initialised")
+	}
+	data, err := json.Marshal(conn)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	enc, err := s.encrypt(data)
+	if err != nil {
+		return fmt.Errorf("encrypt: %w", err)
+	}
+	if appErr := s.api.KVSet(kvPrefixUserToken+userID, enc); appErr != nil {
+		return fmt.Errorf("KVSet: %s", appErr.Error())
+	}
+	return nil
+}
+
+// GetUserConnection returns the user's Tracker connection, or nil if not connected
+// (or the stored blob cannot be decrypted, e.g. after an encryption key reset).
+func (s *Store) GetUserConnection(userID string) *UserConnection {
+	if s.encryptionKey == nil {
+		return nil
+	}
+	data, appErr := s.api.KVGet(kvPrefixUserToken + userID)
+	if appErr != nil || data == nil {
+		return nil
+	}
+	plain, err := s.decrypt(data)
+	if err != nil {
+		return nil
+	}
+	var conn UserConnection
+	if err := json.Unmarshal(plain, &conn); err != nil {
+		return nil
+	}
+	return &conn
+}
+
+// DeleteUserConnection removes the user's Tracker connection.
+func (s *Store) DeleteUserConnection(userID string) {
+	_ = s.api.KVDelete(kvPrefixUserToken + userID)
+}
+
+// SetOAuthState stores a CSRF state token for the OAuth flow. Expires after oauthStateTTLSecs.
+func (s *Store) SetOAuthState(state, userID string) error {
+	if appErr := s.api.KVSetWithExpiry(kvPrefixOAuthState+state, []byte(userID), oauthStateTTLSecs); appErr != nil {
+		return fmt.Errorf("KVSetWithExpiry: %s", appErr.Error())
+	}
+	return nil
+}
+
+// ConsumeOAuthState returns the userID bound to state and deletes it (one-time use).
+// Returns empty string if the state is unknown or expired.
+func (s *Store) ConsumeOAuthState(state string) string {
+	data, appErr := s.api.KVGet(kvPrefixOAuthState + state)
+	if appErr != nil || data == nil {
+		return ""
+	}
+	_ = s.api.KVDelete(kvPrefixOAuthState + state)
+	return string(data)
 }
 
 // SaveIssuePost records that postID carries a card for issueKey. Capped at issuePostsCap; oldest dropped when full.
@@ -341,21 +484,6 @@ func (s *Store) ExpireIssue(issueKey string) {
 	}
 }
 
-// GetUserLogin returns the stored Yandex Tracker login for a MM user, or empty string.
-func (s *Store) GetUserLogin(userID string) string {
-	data, appErr := s.api.KVGet(kvPrefixUserLogin + userID)
-	if appErr != nil || data == nil {
-		return ""
-	}
-	return string(data)
-}
-
-// SetUserLogin stores a Yandex Tracker login for a MM user.
-// Errors are silently ignored.
-func (s *Store) SetUserLogin(userID, login string) {
-	_ = s.api.KVSet(kvPrefixUserLogin+userID, []byte(login))
-}
-
 // AddPostIssueKey records that postID contains a card for issueKey. Idempotent.
 func (s *Store) AddPostIssueKey(postID, issueKey string) {
 	keys := s.GetPostIssueKeys(postID)
@@ -468,7 +596,8 @@ func (s *Store) ClearPostCache() (int, error) {
 			return deleted, fmt.Errorf("KVList: %s", appErr.Error())
 		}
 		for _, key := range keys {
-			if strings.HasPrefix(key, kvPrefixSubscription) || strings.HasPrefix(key, kvPrefixUserLogin) {
+			if strings.HasPrefix(key, kvPrefixSubscription) || strings.HasPrefix(key, kvPrefixUserLogin) ||
+				strings.HasPrefix(key, kvPrefixUserToken) || key == kvKeyEncryptionKey {
 				continue
 			}
 			if delErr := s.api.KVDelete(key); delErr == nil {
