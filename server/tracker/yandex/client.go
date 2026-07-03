@@ -66,6 +66,42 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 }
 
+// Myself returns the Tracker login of the token owner via GET /myself.
+func (c *Client) Myself(ctx context.Context) (string, error) {
+	url := c.apiBase + "/myself"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", fmt.Errorf("myself: %w", tracker.ErrUnauthorized)
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Include the response body: Tracker's 403s explain the actual cause
+		// (no org access, missing scope, …), which is critical when diagnosing
+		// per-user connection failures.
+		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("tracker API error: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(rawBody)))
+	}
+
+	var raw apiMyself
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return "", fmt.Errorf("decode response: %w", err)
+	}
+	if raw.Login == "" {
+		return "", fmt.Errorf("myself: response has no login")
+	}
+	return raw.Login, nil
+}
+
 // GetIssue fetches a single issue by its key (e.g. "PROJECT-123").
 func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, error) {
 	url := fmt.Sprintf("%s/issues/%s", c.apiBase, key)
@@ -113,6 +149,9 @@ func (c *Client) GetTransitions(ctx context.Context, key string) ([]tracker.Tran
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("get transitions: %w", tracker.ErrUnauthorized)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("tracker API error: HTTP %d", resp.StatusCode)
 	}
@@ -155,6 +194,9 @@ func (c *Client) ExecuteTransition(ctx context.Context, key, transitionID string
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("execute transition: %w", tracker.ErrUnauthorized)
+	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		rawBody, _ := io.ReadAll(resp.Body)
 		var apiErr struct {
@@ -191,7 +233,9 @@ func (c *Client) AddComment(ctx context.Context, key, text string) error {
 		return fmt.Errorf("issue %s not found", key)
 	case http.StatusBadRequest:
 		return fmt.Errorf("invalid issue key: %s", key)
-	case http.StatusForbidden, http.StatusUnauthorized:
+	case http.StatusUnauthorized:
+		return fmt.Errorf("add comment: %w", tracker.ErrUnauthorized)
+	case http.StatusForbidden:
 		return fmt.Errorf("no permission to comment on %s", key)
 	default:
 		return fmt.Errorf("tracker API error: HTTP %d", resp.StatusCode)
@@ -213,6 +257,9 @@ func (c *Client) AssignIssue(ctx context.Context, key, login string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("assign: %w", tracker.ErrUnauthorized)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("tracker API error: HTTP %d — check that the login is correct", resp.StatusCode)
 	}

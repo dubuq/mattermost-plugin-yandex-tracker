@@ -12,6 +12,8 @@ import (
 // ExecuteCommand handles /tracker slash commands:
 //
 //	/tracker PROJECT-1            — fetch issue card (ephemeral)
+//	/tracker connect              — connect your personal Yandex Tracker account
+//	/tracker disconnect           — remove your connection
 //	/tracker subscribe QUEUE      — subscribe this channel to a queue
 //	/tracker unsubscribe QUEUE    — remove the subscription
 //	/tracker subscriptions        — list this channel's subscriptions
@@ -21,6 +23,10 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 	subcommand, rest := splitFirst(input)
 
 	switch subcommand {
+	case "connect":
+		return p.cmdConnect(args)
+	case "disconnect":
+		return p.cmdDisconnect(args)
 	case "subscribe":
 		return p.cmdSubscribe(args, rest)
 	case "unsubscribe":
@@ -30,6 +36,28 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 	default:
 		return p.cmdFetchIssue(args, input)
 	}
+}
+
+// cmdConnect starts the per-user OAuth flow by handing the user a link to the
+// plugin's /oauth/connect endpoint, which redirects to the Yandex consent page.
+func (p *Plugin) cmdConnect(args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
+	if !p.getConfiguration().oauthConfigured() {
+		return ephemeralText("Per-user authorization is not configured. Ask your admin to set the Yandex OAuth Client ID and Secret in the plugin settings."), nil
+	}
+	if conn := p.getUserConnection(args.UserId); conn != nil {
+		return ephemeralText(fmt.Sprintf("You are already connected as **%s**. Use `/tracker disconnect` first if you want to reconnect.", conn.Login)), nil
+	}
+	connectURL := fmt.Sprintf("%s/plugins/%s/oauth/connect", p.siteURL(), pluginID)
+	return ephemeralText(fmt.Sprintf("[Click here to connect your Yandex Tracker account](%s). Actions on issue cards (assign, status changes, comments) will then be performed as you.", connectURL)), nil
+}
+
+func (p *Plugin) cmdDisconnect(args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
+	conn := p.getUserConnection(args.UserId)
+	if conn == nil {
+		return ephemeralText("You don't have a connected Yandex Tracker account."), nil
+	}
+	p.disconnectUser(args.UserId)
+	return ephemeralText(fmt.Sprintf("Disconnected Yandex Tracker account **%s**.", conn.Login)), nil
 }
 
 func (p *Plugin) cmdFetchIssue(args *model.CommandArgs, input string) (*model.CommandResponse, *model.AppError) {
@@ -54,7 +82,10 @@ func (p *Plugin) cmdFetchIssue(args *model.CommandArgs, input string) (*model.Co
 	}
 
 	// Slash command cards start expanded — the user explicitly asked to see this issue.
-	attachment := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), false)
+	// The card is ephemeral (visible only to this user), so write buttons are
+	// hidden entirely when the user has not connected their Tracker account.
+	connected := p.getUserConnection(args.UserId) != nil
+	attachment := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), false, connected)
 	return &model.CommandResponse{
 		ResponseType: model.CommandResponseTypeEphemeral,
 		Attachments:  []*model.SlackAttachment{attachment},

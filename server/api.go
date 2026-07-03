@@ -21,8 +21,10 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.safeServe("expand", p.handleExpand)(w, r)
 	case "/assign":
 		p.safeServe("assign", p.handleAssignToMe)(w, r)
-	case "/assign-submit":
-		p.safeServe("assign-submit", p.handleAssignSubmit)(w, r)
+	case "/oauth/connect":
+		p.safeServe("oauth-connect", p.handleOAuthConnect)(w, r)
+	case "/oauth/complete":
+		p.safeServe("oauth-complete", p.handleOAuthComplete)(w, r)
 	case "/change-status":
 		p.safeServe("change-status", p.handleChangeStatus)(w, r)
 	case "/transition":

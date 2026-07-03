@@ -214,7 +214,7 @@ func (p *Plugin) updateIssueCards(issueKey string, issue *tracker.Issue) {
 			}
 			continue
 		}
-		updated := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), true)
+		updated := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), true, true)
 
 		// Rebuild the full attachment list from KV — never read from post.Props
 		// to avoid crashing on corrupted data written by previous race conditions.
@@ -275,7 +275,7 @@ func (p *Plugin) handleIssueCreated(issueKey string) {
 	}
 
 	cfg := p.getConfiguration()
-	attachment := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), false)
+	attachment := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), false, true)
 
 	for _, channelID := range channelIDs {
 		post := &model.Post{

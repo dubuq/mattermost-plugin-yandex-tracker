@@ -2,8 +2,13 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
+
+// ErrUnauthorized is returned when the API rejects the token (HTTP 401).
+// For per-user tokens this means the user must reconnect their account.
+var ErrUnauthorized = errors.New("unauthorized")
 
 type ctxLangKey struct{}
 
@@ -49,6 +54,8 @@ type Client interface {
 	ExecuteTransition(ctx context.Context, key, transitionID string, fields map[string]interface{}) error
 	AssignIssue(ctx context.Context, key, login string) error
 	AddComment(ctx context.Context, key, text string) error
+	// Myself returns the login of the user who owns the client's token.
+	Myself(ctx context.Context) (string, error)
 }
 
 // Issue is the canonical domain type used throughout the plugin.

@@ -46,7 +46,9 @@ export const AddCommentModal = () => {
         try {
             const resp = await fetch(`/plugins/${PLUGIN_ID}/add-comment`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // X-Requested-With is required for MM to pass the session to
+                // the plugin (Mattermost-User-Id header) on cookie-auth requests.
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 body: JSON.stringify({ post_id: postId, issue_key: key }),
             });
             const data = await resp.json() as { ok: boolean; error?: string };

@@ -28,6 +28,8 @@ When an issue status changes in Yandex Tracker, the card on the original Matterm
 - **Change Status** — opens a transition dialog; if the transition requires additional fields (e.g. resolution), a second dialog collects them
 - **Add to Tracker issue** — post any Mattermost message as a comment on an issue via the `...` post menu
 
+Write actions are always performed with the **user's own Yandex Tracker account**, never the plugin's service account. Each user connects once with `/tracker connect` (per-user OAuth); until then, clicking a write action shows a prompt to connect, and ephemeral cards from `/tracker ISSUE-1` hide the write buttons entirely. This requires the **Yandex OAuth Client ID/Secret** plugin settings (see setup below).
+
 ![Change Status transition dialog](assets/change-status-dialog.png)
 
 ![Fill Fields dialog for required transition fields](assets/fill-fields-dialog.png)
@@ -64,7 +66,8 @@ Posts an ephemeral preview card for any issue (only visible to you).
 
 - Mattermost Server **9.0** or later (self-hosted)
 - Yandex Tracker access — Cloud org or legacy Yandex 360 org both supported
-- A Yandex **OAuth token** and your **Organization ID** (see below)
+- A Yandex **OAuth token** and your **Organization ID** for read access (see below)
+- A Yandex **OAuth application** (Client ID + Secret) for per-user write actions — each user connects their own account via `/tracker connect` (see [Per-user OAuth app](#per-user-oauth-app-for-write-actions))
 
 ### 1. Get your Yandex credentials
 
@@ -119,12 +122,27 @@ Go to **System Console → Plugins → Yandex Tracker** and fill in:
 | ------------------------ | ----------------------------------------------------------------------------- |
 | **Yandex Tracker Token** | OAuth token (`y0_AgAA...`)                                                    |
 | **Organization ID**      | Org ID (`bpf...`)                                                             |
+| **Yandex OAuth Client ID / Secret** | Credentials of a Yandex OAuth app for per-user connections (see below) |
 | **Webhook Secret**       | Any strong random string — `openssl rand -hex 32`                             |
 | **Bot Display Name**     | `Tracker Bot` (or any name you prefer)                                        |
 | **Monitor All Channels** | Disabled (default) — add the bot to channels you want monitored               |
 | **Background Refresh**   | Every 6 hours (default) — re-fetches all tracked issues as a webhook fallback |
 
 Click **Test Connection** to verify credentials, then **Save**.
+
+#### Per-user OAuth app (for write actions)
+
+Write actions (assign, status changes, comments) require each user to connect their own Yandex account. Set up one OAuth application for this:
+
+1. Go to [oauth.yandex.ru](https://oauth.yandex.ru) and create an application (you can reuse the app from step 1, but the Redirect URI must be changed)
+2. Under **Platforms**, tick **Web services** and set the Redirect URI to:
+   ```
+   https://YOUR-MATTERMOST-SERVER/plugins/com.yandex-tracker-mattermost/oauth/complete
+   ```
+3. Under **Access**, enable `tracker:read` and `tracker:write`
+4. Copy the **ClientID** and **Client secret** into the plugin settings (**Yandex OAuth Client ID** / **Yandex OAuth Client Secret**) and save
+
+Users then run `/tracker connect` in any channel, approve access on the Yandex consent page, and get a confirmation DM from the bot. `/tracker disconnect` removes the connection. Tokens are stored encrypted (AES-256-GCM) in the plugin's KV store and refreshed automatically when they expire — users only need to reconnect if they revoke the app's access in Yandex.
 
 ### 4. Add the bot to channels
 
@@ -259,7 +277,7 @@ Transitions without an entry in this config execute immediately with no intermed
 
 ### Assign to me
 
-Expand a card and click **Assign to me**. The first time you use this, a dialog asks for your **Yandex Tracker login** — this is your Yandex account username (the part before `@` in your Yandex email, or the login shown in your Tracker profile). The login is saved and not asked again.
+Expand a card and click **Assign to me**. The issue is assigned to your connected Yandex Tracker account (run `/tracker connect` once beforehand). The assignment is made with your own token, so Tracker records you as the author of the change.
 
 ### Change Status
 
@@ -267,13 +285,15 @@ Expand a card and click **Change Status** to see available transitions for the c
 
 ### Add to Tracker issue
 
-Hover over any Mattermost message → click `...` → **Add to Tracker issue**. A dialog asks for the issue key (`DEV-123`). The message text is posted as a comment on that Tracker issue. Useful for pushing AI-generated thread summaries or decisions from a Mattermost discussion directly into the relevant issue.
+Hover over any Mattermost message → click `...` → **Add to Tracker issue**. A dialog asks for the issue key (`DEV-123`). The message text is posted as a comment on that Tracker issue, authored by your connected account. Useful for pushing AI-generated thread summaries or decisions from a Mattermost discussion directly into the relevant issue.
 
 ### Slash commands
 
 | Command                      | Description                                                            |
 | ---------------------------- | ---------------------------------------------------------------------- |
 | `/tracker KEY`               | Post an ephemeral preview card for any issue (only visible to you)     |
+| `/tracker connect`           | Connect your personal Yandex Tracker account (required for write actions) |
+| `/tracker disconnect`        | Remove your personal Tracker connection                                |
 | `/tracker subscribe QUEUE`   | Subscribe the current channel to a queue — new issues auto-post a card |
 | `/tracker unsubscribe QUEUE` | Remove the channel's subscription to a queue                           |
 | `/tracker subscriptions`     | List all queues the current channel is subscribed to                   |
