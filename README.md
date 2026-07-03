@@ -6,6 +6,8 @@ Brings Yandex Tracker issues into Mattermost — inline preview cards that updat
 
 Tested with Mattermost Server 9.x and Yandex Tracker Cloud and legacy 360 organizations.
 
+> 🇷🇺 Пошаговая инструкция по установке на русском - в разделе [Инструкция по установке (RU)](#инструкция-по-установке-ru).
+
 ## Feature summary
 
 ### Inline issue preview cards
@@ -351,6 +353,73 @@ To release:
 2. Add an entry to `CHANGELOG.md`
 3. `git tag v<version> && git push origin v<version>`
 4. Create a GitHub release from the tag and attach the built `.tar.gz`
+
+---
+
+## Инструкция по установке (RU)
+
+Пошаговая инструкция для администратора. Всюду ниже замените `YOUR-MATTERMOST-SERVER` на адрес вашего сервера Mattermost.
+
+### Часть 1. Сервисный токен (для чтения задач)
+
+Лучше делать всё из-под сервисного (робот-)аккаунта организации, а не личного - токен будет жить, даже если сотрудник уйдёт. У аккаунта должен быть доступ на чтение к очередям, задачи из которых будут показываться в Mattermost.
+
+1. Зайдите на [oauth.yandex.ru](https://oauth.yandex.ru) под этим аккаунтом → "Создать приложение".
+2. В разделе "Платформы" выберите "Веб-сервисы", Callback URI: `https://oauth.yandex.ru/verification_code`
+3. В разделе "Доступы" → "Яндекс.Трекер" включите `tracker:read` и `tracker:write`.
+4. Сохраните и скопируйте ClientID приложения.
+5. Откройте в браузере (подставив ClientID из шага 4) и нажмите "Разрешить": `https://oauth.yandex.ru/authorize?response_type=token&client_id=CLIENT_ID_ИЗ_ШАГА_4`
+6. После редиректа в адресной строке будет `access_token=y0_AgAA...` - скопируйте это значение. Это токен для чтения, действует 1 год.
+
+Также понадобится ID организации: [console.cloud.yandex.ru](https://console.cloud.yandex.ru) → настройки организации → "Идентификатор организации" (вида `bpf...`). Если организация старая (Яндекс 360 без Cloud) - ID будет числовой, это нормально, подойдёт и он.
+
+### Часть 2. OAuth-приложение для сотрудников (для действий от их имени)
+
+Это второе, отдельное приложение - через него сотрудники будут подключать свои личные аккаунты Трекера к Mattermost командой `/tracker connect`.
+
+1. Там же на [oauth.yandex.ru](https://oauth.yandex.ru) → "Создать приложение" (ещё одно).
+2. "Платформы" → "Веб-сервисы", Redirect URI: `https://YOUR-MATTERMOST-SERVER/plugins/com.yandex-tracker-mattermost/oauth/complete`
+3. "Доступы" → "Яндекс.Трекер": `tracker:read` и `tracker:write`.
+4. Сохраните и скопируйте ClientID и Client secret.
+
+### Часть 3. Установка плагина в Mattermost
+
+1. Скачайте файл плагина `.tar.gz` из [releases](https://github.com/dubuq/mattermost-plugin-yandex-tracker/releases/latest) (или соберите сами: `make bundle`).
+2. System Console → Plugin Management → убедитесь, что "Enable Plugin Uploads" включено (если нет - включите в config.json: `PluginSettings.EnableUploads: true` и перезапустите сервер).
+3. Там же → "Upload Plugin" → загрузите файл `.tar.gz` → включите плагин (Enable).
+
+### Часть 4. Настройка плагина
+
+System Console → Plugins → Yandex Tracker, заполните поля:
+
+- **Yandex Tracker Token** - токен из части 1 (`y0_AgAA...`)
+- **Organization ID** - ID организации из части 1
+- **Yandex OAuth Client ID** - ClientID приложения из части 2
+- **Yandex OAuth Client Secret** - Client secret приложения из части 2
+- **Webhook Secret** - любая случайная строка, например результат `openssl rand -hex 32`. Сохраните её - она понадобится при настройке триггеров в части 6.
+- Остальные поля (Bot Display Name, Monitor All Channels, Background Refresh, цвета карточек) - можно оставить по умолчанию.
+
+Нажмите "Test Connection" - должно показать успех. Затем "Save".
+
+### Часть 5. Добавить бота в команду и каналы
+
+1. System Console → User Management → Teams → выберите команду → добавьте пользователя `tracker-bot`.
+2. В каждом канале, где нужны карточки: Участники → Добавить участников → `tracker-bot`. Плагин отслеживает только каналы, где бот состоит участником (если не включён Monitor All Channels).
+
+### Часть 6. Триггеры в Яндекс.Трекере
+
+Требуются права администратора очереди. В настройках очереди → "Триггеры" создайте HTTP-триггеры на адрес `https://YOUR-MATTERMOST-SERVER/plugins/com.yandex-tracker-mattermost/webhook` с заголовками `Content-Type: application/json` и `X-Webhook-Secret: <секрет из части 4>` - по одному на каждое событие:
+
+- Изменение задачи: `{ "key": "{{issue.key}}", "type": "issueUpdated" }`
+- Новый комментарий: `{ "key": "{{issue.key}}", "type": "commentCreated", "author": "{{comment.author.display}}" }`
+- Смена исполнителя: `{ "key": "{{issue.key}}", "type": "issueAssigned", "assignee": "{{issue.assignee.display}}" }`
+- Создание задачи (для подписок `/tracker subscribe`): `{ "key": "{{issue.key}}", "type": "issueCreated" }`
+
+### Проверка
+
+1. Вставьте ключ задачи (например `DEV-123`) в канал с ботом - появится карточка.
+2. Выполните `/tracker connect` - после подтверждения на странице Яндекса бот пришлёт личное сообщение.
+3. Поменяйте статус задачи в Трекере - карточка в Mattermost обновится сама в течение нескольких секунд.
 
 ---
 
