@@ -14,6 +14,8 @@ type Configuration struct {
 	TrackerToken       string `json:"TrackerToken"`
 	OrgID              string `json:"OrgID"`
 	WebhookSecret      string `json:"WebhookSecret"`
+	OAuthClientID      string `json:"OAuthClientID"`     // Yandex OAuth app for per-user connections
+	OAuthClientSecret  string `json:"OAuthClientSecret"`
 	BotDisplayName     string `json:"BotDisplayName"`
 	MonitorAllChannels      bool   `json:"MonitorAllChannels"`
 	BackgroundRefreshHours string `json:"BackgroundRefreshHours"` // "0"=disabled; otherwise interval in hours
@@ -134,6 +136,13 @@ func (c *Configuration) refreshIntervalHours() int {
 	return n
 }
 
+// oauthConfigured reports whether per-user OAuth connections are possible.
+// Without it, write actions (assign, transitions, comments) are unavailable —
+// they are never performed with the service-account token.
+func (c *Configuration) oauthConfigured() bool {
+	return c.OAuthClientID != "" && c.OAuthClientSecret != ""
+}
+
 func (c *Configuration) isValid() error {
 	if c.TrackerToken == "" {
 		return fmt.Errorf("tracker token is required")
@@ -197,6 +206,10 @@ func (p *Plugin) OnConfigurationChange() error {
 
 	if err := cfg.isValid(); err != nil {
 		p.API.LogWarn("Plugin configuration is incomplete — hook will not run", "reason", err.Error())
+	}
+
+	if !cfg.oauthConfigured() {
+		p.API.LogWarn("Yandex OAuth Client ID/Secret not set — per-user actions (assign, status change, comments) are disabled until users can connect their accounts.")
 	}
 
 	if cfg.WebhookSecret == "" {

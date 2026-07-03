@@ -15,7 +15,7 @@ const WebhookSettings = () => {
     const [clearResult, setClearResult] = useState<ClearResult | null>(null);
 
     useEffect(() => {
-        fetch(`/plugins/${PLUGIN_ID}/webhook-url`)
+        fetch(`/plugins/${PLUGIN_ID}/webhook-url`, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
             .then((r) => r.json())
             .then((data) => setUrl(data.url ?? ''))
             .catch(() => setUrl('Failed to load URL'));
@@ -31,7 +31,7 @@ const WebhookSettings = () => {
         setTesting(true);
         setResult(null);
         try {
-            const r = await fetch(`/plugins/${PLUGIN_ID}/verify`, { method: 'POST' });
+            const r = await fetch(`/plugins/${PLUGIN_ID}/verify`, { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
             setResult(await r.json());
         } catch {
             setResult({ ok: false, error: 'Network error — could not reach the plugin.' });
@@ -44,7 +44,7 @@ const WebhookSettings = () => {
         setClearing(true);
         setClearResult(null);
         try {
-            const r = await fetch(`/plugins/${PLUGIN_ID}/clear-cache`, { method: 'POST' });
+            const r = await fetch(`/plugins/${PLUGIN_ID}/clear-cache`, { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
             if (!r.ok) {
                 setClearResult({ ok: false, error: `Server returned ${r.status}` });
                 return;

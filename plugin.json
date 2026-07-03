@@ -41,6 +41,20 @@
         "placeholder": ""
       },
       {
+        "key": "OAuthClientID",
+        "display_name": "Yandex OAuth Client ID",
+        "type": "text",
+        "help_text": "ClientID of a Yandex OAuth application (create at https://oauth.yandex.ru with Tracker read/write permissions). Required for per-user actions: users connect via /tracker connect, and all assign/status/comment actions run under their own account. Set the app's Redirect URI to <SiteURL>/plugins/com.yandex-tracker-mattermost/oauth/complete",
+        "placeholder": ""
+      },
+      {
+        "key": "OAuthClientSecret",
+        "display_name": "Yandex OAuth Client Secret",
+        "type": "text",
+        "help_text": "Client secret of the same Yandex OAuth application.",
+        "secret": true
+      },
+      {
         "key": "WebhookSecret",
         "display_name": "Webhook Secret",
         "type": "text",

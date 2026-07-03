@@ -30,6 +30,11 @@ type apiUser struct {
 	Display string `json:"display"`
 }
 
+// apiMyself mirrors the relevant part of GET /v2/myself.
+type apiMyself struct {
+	Login string `json:"login"`
+}
+
 // apiTransition mirrors a single entry from GET /v2/issues/:key/transitions.
 type apiTransition struct {
 	ID      string   `json:"id"`

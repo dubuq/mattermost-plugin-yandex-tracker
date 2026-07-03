@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -130,7 +131,7 @@ func (p *Plugin) toggleCollapse(w http.ResponseWriter, r *http.Request, collapse
 	}
 
 	cfg := p.getConfiguration()
-	attachment := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), collapse)
+	attachment := p.formatter.BuildAttachment(issue, cfg.resolveStatusColor(issue.Status), p.translations(), collapse, true)
 
 	// Rebuild full attachment list from KV — never read from post.Props.
 	allKeys := p.store.GetPostIssueKeys(req.PostId)
@@ -153,7 +154,10 @@ func (p *Plugin) toggleCollapse(w http.ResponseWriter, r *http.Request, collapse
 	writeActionResponse(w, &model.PostActionIntegrationResponse{Update: post})
 }
 
-// handleAssignToMe opens a dialog pre-filled with the user's stored Yandex login.
+// handleAssignToMe assigns the issue to the clicking user's connected Tracker
+// account. The user's own OAuth token is used, so Tracker attributes the change
+// to them — never to the service account. Non-connected users get an ephemeral
+// prompt to run /tracker connect.
 func (p *Plugin) handleAssignToMe(w http.ResponseWriter, r *http.Request) {
 	var req model.PostActionIntegrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -167,81 +171,46 @@ func (p *Plugin) handleAssignToMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the stored login if available, otherwise fall back to MM username.
-	// Also read the user's locale for dialog translation.
-	login := p.store.GetUserLogin(req.UserId)
-	var userLocale string
-	if user, appErr := p.API.GetUser(req.UserId); appErr == nil {
-		if login == "" {
-			login = user.Username
-		}
-		userLocale = user.Locale
+	client, conn := p.getClientForUser(req.UserId)
+	if client == nil {
+		p.promptConnect(req.UserId, req.ChannelId)
+		writeActionResponse(w, nil)
+		return
 	}
 
-	t := translationsForLocale(userLocale)
-	siteURL := p.siteURL()
+	// Copy the fields needed by the goroutine — do not capture req directly.
+	userID := req.UserId
+	channelID := req.ChannelId
+	login := conn.Login
 
-	if appErr := p.API.OpenInteractiveDialog(model.OpenDialogRequest{
-		TriggerId: req.TriggerId,
-		URL:       fmt.Sprintf("%s/plugins/%s/assign-submit", siteURL, pluginID),
-		Dialog: model.Dialog{
-			CallbackId:  issueKey + "|" + req.PostId,
-			Title:       fmt.Sprintf(t.AssignDialogTitle, issueKey),
-			SubmitLabel: t.AssignDialogSubmit,
-			Elements: []model.DialogElement{
-				{
-					DisplayName: t.AssignLoginLabel,
-					Name:        "login",
-					Type:        "text",
-					Default:     login,
-					HelpText:    t.AssignLoginHelp,
-				},
-			},
-		},
-	}); appErr != nil {
-		p.API.LogError("assign: failed to open dialog", "key", issueKey, "err", appErr.Error())
-	}
-
+	// Respond immediately — AssignIssue is a blocking HTTP call and a slow
+	// handler risks an MM muxBroker timeout killing the plugin.
 	writeActionResponse(w, nil)
-}
 
-// handleAssignSubmit processes the assign dialog and calls AssignIssue asynchronously.
-func (p *Plugin) handleAssignSubmit(w http.ResponseWriter, r *http.Request) {
-	var req model.SubmitDialogRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		if p.ctx.Err() != nil {
+			return
+		}
 
-	if req.Cancelled {
-		writeSubmitDialogResponse(w, "")
-		return
-	}
+		if err := client.AssignIssue(p.ctx, issueKey, login); err != nil {
+			p.API.LogError("assign: failed to assign issue", "key", issueKey, "userID", userID, "err", err.Error())
+			if errors.Is(err, tracker.ErrUnauthorized) {
+				p.promptReconnect(userID, channelID)
+				return
+			}
+			p.sendUserEphemeral(userID, channelID, func(t Translations) string {
+				return fmt.Sprintf(t.AssignFailed, issueKey, err.Error())
+			})
+			return
+		}
 
-	parts := strings.SplitN(req.CallbackId, "|", 2)
-	if len(parts) != 2 {
-		writeSubmitDialogResponse(w, "Invalid request.")
-		return
-	}
-	issueKey, _ := parts[0], parts[1] // postID not needed — enqueueForceUpdate updates all cards
-
-	login, _ := req.Submission["login"].(string)
-	login = strings.TrimSpace(login)
-	if login == "" {
-		writeSubmitDialogResponse(w, "Please enter your Yandex Tracker login.")
-		return
-	}
-
-	p.store.SetUserLogin(req.UserId, login)
-
-	if err := p.getTrackerClient().AssignIssue(p.ctx, issueKey, login); err != nil {
-		p.API.LogError("assign: failed to assign issue", "key", issueKey, "err", err.Error())
-		writeSubmitDialogResponse(w, "Failed to assign issue: "+err.Error())
-		return
-	}
-
-	p.enqueueForceUpdate(issueKey)
-	writeSubmitDialogResponse(w, "")
+		p.enqueueForceUpdate(issueKey)
+		p.sendUserEphemeral(userID, channelID, func(t Translations) string {
+			return fmt.Sprintf(t.AssignedToYou, issueKey)
+		})
+	}()
 }
 
 // handleChangeStatus fetches available transitions and opens a status-picker dialog.
@@ -254,6 +223,15 @@ func (p *Plugin) handleChangeStatus(w http.ResponseWriter, r *http.Request) {
 
 	issueKey, _ := req.Context["issue_key"].(string)
 	if issueKey == "" || !p.isConfigured() {
+		writeActionResponse(w, nil)
+		return
+	}
+
+	// Transitions are fetched and executed with the user's own token so both
+	// the available options and the change itself reflect their Tracker account.
+	client, _ := p.getClientForUser(req.UserId)
+	if client == nil {
+		p.promptConnect(req.UserId, req.ChannelId)
 		writeActionResponse(w, nil)
 		return
 	}
@@ -287,9 +265,13 @@ func (p *Plugin) handleChangeStatus(w http.ResponseWriter, r *http.Request) {
 		transitions := p.store.GetCachedTransitions(issueKey)
 		if transitions == nil {
 			var err error
-			transitions, err = p.getTrackerClient().GetTransitions(tracker.ContextWithLocale(p.ctx, userLocale), issueKey)
+			transitions, err = client.GetTransitions(tracker.ContextWithLocale(p.ctx, userLocale), issueKey)
 			if err != nil {
 				p.API.LogError("change-status: failed to get transitions", "key", issueKey, "err", err.Error())
+				if errors.Is(err, tracker.ErrUnauthorized) {
+					p.promptReconnect(userID, channelID)
+					return
+				}
 				p.API.SendEphemeralPost(userID, &model.Post{
 					ChannelId: channelID,
 					Message:   fmt.Sprintf("Could not load transitions for %s: %s", issueKey, err.Error()),
@@ -412,10 +394,15 @@ func (p *Plugin) handleTransition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// No required fields — execute the transition directly.
-	if err := p.getTrackerClient().ExecuteTransition(p.ctx, issueKey, transitionID, nil); err != nil {
-		p.API.LogError("transition: failed to execute transition", "key", issueKey, "err", err.Error())
-		writeSubmitDialogResponse(w, "Failed to change status: "+err.Error())
+	// No required fields — execute the transition directly, as the user.
+	client, _ := p.getClientForUser(req.UserId)
+	if client == nil {
+		writeSubmitDialogResponse(w, p.translationsForUser(req.UserId).ConnectPrompt)
+		return
+	}
+	if err := client.ExecuteTransition(p.ctx, issueKey, transitionID, nil); err != nil {
+		p.API.LogError("transition: failed to execute transition", "key", issueKey, "userID", req.UserId, "err", err.Error())
+		writeSubmitDialogResponse(w, p.writeErrorMessage(req.UserId, err, "Failed to change status: "+err.Error()))
 		return
 	}
 
@@ -537,10 +524,15 @@ func (p *Plugin) handleFillFieldsSubmit(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	if err := p.getTrackerClient().ExecuteTransition(p.ctx, pending.IssueKey, pending.TransitionID, fields); err != nil {
+	client, _ := p.getClientForUser(req.UserId)
+	if client == nil {
+		writeSubmitDialogResponse(w, p.translationsForUser(req.UserId).ConnectPrompt)
+		return
+	}
+	if err := client.ExecuteTransition(p.ctx, pending.IssueKey, pending.TransitionID, fields); err != nil {
 		p.API.LogError("fill-fields-submit: failed to execute transition",
-			"key", pending.IssueKey, "transitionID", pending.TransitionID, "err", err.Error())
-		writeSubmitDialogResponse(w, "Failed to change status: "+err.Error())
+			"key", pending.IssueKey, "transitionID", pending.TransitionID, "userID", req.UserId, "err", err.Error())
+		writeSubmitDialogResponse(w, p.writeErrorMessage(req.UserId, err, "Failed to change status: "+err.Error()))
 		return
 	}
 
@@ -578,6 +570,20 @@ func (p *Plugin) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := r.Header.Get("Mattermost-User-Id")
+	if userID == "" {
+		respondJSON(w, map[string]interface{}{"ok": false, "error": "not authenticated"})
+		return
+	}
+
+	// Comments are posted with the user's own token so Tracker shows them as
+	// the real author — no service-account attribution, no "(via …)" suffix.
+	client, _ := p.getClientForUser(userID)
+	if client == nil {
+		respondJSON(w, map[string]interface{}{"ok": false, "error": p.translationsForUser(userID).ConnectPrompt})
+		return
+	}
+
 	post, appErr := p.API.GetPost(req.PostID)
 	if appErr != nil {
 		p.API.LogError("add-comment: failed to get post", "postID", req.PostID, "err", appErr.Error())
@@ -585,17 +591,9 @@ func (p *Plugin) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	text := post.Message
-	userID := r.Header.Get("Mattermost-User-Id")
-	if userID != "" {
-		if user, err := p.API.GetUser(userID); err == nil {
-			text = fmt.Sprintf("%s\n\n— %s (via Mattermost)", text, user.GetDisplayName(""))
-		}
-	}
-
-	if err := p.getTrackerClient().AddComment(p.ctx, req.IssueKey, text); err != nil {
-		p.API.LogError("add-comment: failed to add comment", "key", req.IssueKey, "err", err.Error())
-		respondJSON(w, map[string]interface{}{"ok": false, "error": err.Error()})
+	if err := client.AddComment(p.ctx, req.IssueKey, post.Message); err != nil {
+		p.API.LogError("add-comment: failed to add comment", "key", req.IssueKey, "userID", userID, "err", err.Error())
+		respondJSON(w, map[string]interface{}{"ok": false, "error": p.writeErrorMessage(userID, err, err.Error())})
 		return
 	}
 

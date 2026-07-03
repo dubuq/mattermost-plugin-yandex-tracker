@@ -28,7 +28,11 @@ const emptyFieldValue = "—"
 
 // BuildAttachment converts an issue into an inline post attachment.
 // collapsed=true shows only Status+Assignee; false shows all fields.
-func (f *Formatter) BuildAttachment(issue *tracker.Issue, sidebarColor string, t Translations, collapsed bool) *model.SlackAttachment {
+// withWriteActions=false omits the Assign/Change Status buttons — used for
+// ephemeral (per-user) cards when the viewer has not connected their Tracker
+// account. Shared channel cards always include them; the click handlers gate
+// per-user and prompt non-connected users to run /tracker connect.
+func (f *Formatter) BuildAttachment(issue *tracker.Issue, sidebarColor string, t Translations, collapsed, withWriteActions bool) *model.SlackAttachment {
 	status := issue.Status
 	if status == "" {
 		status = emptyFieldValue
@@ -90,22 +94,27 @@ func (f *Formatter) BuildAttachment(issue *tracker.Issue, sidebarColor string, t
 				Context: map[string]interface{}{"issue_key": issue.Key},
 			},
 		},
-		{
-			Name: t.AssignToMeButton,
-			Type: model.PostActionTypeButton,
-			Integration: &model.PostActionIntegration{
-				URL:     fmt.Sprintf("/plugins/%s/assign", f.pluginID),
-				Context: map[string]interface{}{"issue_key": issue.Key},
+	}
+
+	if withWriteActions {
+		actions = append(actions,
+			&model.PostAction{
+				Name: t.AssignToMeButton,
+				Type: model.PostActionTypeButton,
+				Integration: &model.PostActionIntegration{
+					URL:     fmt.Sprintf("/plugins/%s/assign", f.pluginID),
+					Context: map[string]interface{}{"issue_key": issue.Key},
+				},
 			},
-		},
-		{
-			Name: t.ChangeStatusButton,
-			Type: model.PostActionTypeButton,
-			Integration: &model.PostActionIntegration{
-				URL:     fmt.Sprintf("/plugins/%s/change-status", f.pluginID),
-				Context: map[string]interface{}{"issue_key": issue.Key},
+			&model.PostAction{
+				Name: t.ChangeStatusButton,
+				Type: model.PostActionTypeButton,
+				Integration: &model.PostActionIntegration{
+					URL:     fmt.Sprintf("/plugins/%s/change-status", f.pluginID),
+					Context: map[string]interface{}{"issue_key": issue.Key},
+				},
 			},
-		},
+		)
 	}
 
 	return &model.SlackAttachment{
