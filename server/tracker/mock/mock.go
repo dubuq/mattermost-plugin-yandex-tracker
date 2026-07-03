@@ -50,3 +50,11 @@ func (m *Client) AssignIssue(_ context.Context, _, _ string) error { return m.Er
 
 // AddComment is a no-op in tests.
 func (m *Client) AddComment(_ context.Context, _, _ string) error { return m.Err }
+
+// Myself returns a fixed login for tests.
+func (m *Client) Myself(_ context.Context) (string, error) {
+	if m.Err != nil {
+		return "", m.Err
+	}
+	return "mock-user", nil
+}

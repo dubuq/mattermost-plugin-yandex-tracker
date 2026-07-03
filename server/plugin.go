@@ -42,6 +42,11 @@ type Plugin struct {
 	// can be called from OnConfigurationChange without a race.
 	refreshMu     sync.Mutex
 	refreshCancel context.CancelFunc
+
+	// oauthMu serializes per-user token refreshes so concurrent actions from
+	// the same user don't race a refresh_token exchange (Yandex invalidates
+	// the old refresh token once used).
+	oauthMu sync.Mutex
 }
 
 func (p *Plugin) OnActivate() error {
@@ -66,6 +71,9 @@ func (p *Plugin) OnActivate() error {
 	p.ensureBotInAllTeams()
 
 	p.store = NewStore(p.API)
+	if err := p.store.loadEncryptionKey(); err != nil {
+		return fmt.Errorf("failed to load token encryption key: %w", err)
+	}
 	p.formatter = NewFormatter(pluginID)
 	p.restrictTrackerLinkPreview()
 
@@ -74,8 +82,8 @@ func (p *Plugin) OnActivate() error {
 		DisplayName:      "Yandex Tracker",
 		Description:      "Yandex Tracker integration — fetch issues, manage queue subscriptions.",
 		AutoComplete:     true,
-		AutoCompleteDesc: "Fetch an issue card, or manage queue subscriptions for this channel.",
-		AutoCompleteHint: "[issue key | subscribe QUEUE | unsubscribe QUEUE | subscriptions]",
+		AutoCompleteDesc: "Fetch an issue card, connect your Tracker account, or manage queue subscriptions.",
+		AutoCompleteHint: "[issue key | connect | disconnect | subscribe QUEUE | unsubscribe QUEUE | subscriptions]",
 	}); err != nil {
 		p.API.LogWarn("Failed to register /tracker command", "err", err.Error())
 	}
