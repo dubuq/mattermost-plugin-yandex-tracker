@@ -12,6 +12,16 @@ import (
 // Word boundaries prevent matching inside URLs or longer identifiers.
 var issueKeyPattern = regexp.MustCompile(`\b[A-Z][A-Z0-9]{0,19}-\d+\b`)
 
+// issueKeyExact anchors the same grammar for validating a standalone key.
+var issueKeyExact = regexp.MustCompile(`^[A-Z][A-Z0-9]{0,19}-\d+$`)
+
+// validIssueKey reports whether s is a well-formed Yandex Tracker issue key.
+// Every externally supplied key (webhook, action, dialog, webapp) must pass this
+// before it is used to build a Tracker API URL or KV key.
+func validIssueKey(s string) bool {
+	return issueKeyExact.MatchString(s)
+}
+
 // MessageHasBeenPosted detects issue keys in new posts and enqueues card builds.
 func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, post *model.Post) {
 	defer func() {

@@ -10,8 +10,23 @@ MM_ADMIN_PASSWORD ?=
 -include .env
 
 ## Build server binary for all target platforms.
-## Uses the Go 1.23 Docker image to avoid the Go 1.25+ synctest runtime bug
-## that causes fatal crashes in net/http when running inside Mattermost plugins.
+##
+## The Go toolchain is pinned to 1.23. Do NOT bump it without re-verifying at
+## runtime — Go 1.25+ fatally crashes this plugin inside Mattermost during
+## outbound HTTPS to the Tracker API. Two distinct fatals were reproduced on a
+## Go 1.26.4 build (2026-07), both in the net/http -> crypto/tls path:
+##   - fatal error: select on synctest channel from outside bubble
+##   - panic: runtime error: growslice: len out of range   (crypto/x509 CertPool, TLS handshake)
+## MM health-check-restarts the plugin in a loop, so cards and card actions fail
+## intermittently.
+##
+## We attempted the upgrade deliberately (Go 1.26 + server/public v0.4.3 + the
+## CVE-patched x/net and grpc) to clear govulncheck findings. It didn't work:
+## those dependency versions REQUIRE Go 1.25+, which is exactly what reintroduces
+## the crash — stability and the newer deps are mutually exclusive. So we stay on
+## 1.23 for stability and knowingly accept that the x/net / grpc / server-public
+## dependency CVEs remain unpatched on the shipped build. Revisit when a Go release
+## fixes the net/http+synctest fatal, or when MM's plugin runtime tolerates a newer Go.
 GO_BUILD_IMAGE ?= golang:1.23-alpine
 .PHONY: server
 server:

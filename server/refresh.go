@@ -117,7 +117,12 @@ func (p *Plugin) runRefresh(ctx context.Context) {
 			}
 			checked++
 
-			issue, err := p.getTrackerClient().GetIssue(tracker.ContextWithLocale(ctx, p.serverLocale()), issueKey)
+			client := p.getTrackerClient()
+			if client == nil {
+				// Configuration was cleared mid-cycle; stop this run cleanly.
+				return
+			}
+			issue, err := client.GetIssue(tracker.ContextWithLocale(ctx, p.serverLocale()), issueKey)
 			if err != nil {
 				p.API.LogError("Background refresh: failed to fetch issue", "key", issueKey, "err", err.Error())
 				continue

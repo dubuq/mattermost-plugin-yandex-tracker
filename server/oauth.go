@@ -53,10 +53,12 @@ func (p *Plugin) getUserConnection(userID string) *UserConnection {
 // connection) when refresh is impossible or rejected — the caller then prompts
 // the user to reconnect.
 func (p *Plugin) refreshUserConnection(userID string) *UserConnection {
-	// Serialized: a used Yandex refresh token is invalidated, so two
-	// concurrent refreshes for the same user would kill the connection.
-	p.oauthMu.Lock()
-	defer p.oauthMu.Unlock()
+	// Serialized per user: a used Yandex refresh token is invalidated, so two
+	// concurrent refreshes for the same user would kill the connection. Different
+	// users take different locks and never block each other.
+	lock := p.userOAuthLock(userID)
+	lock.Lock()
+	defer lock.Unlock()
 
 	// Re-read under the lock — another goroutine may have just refreshed.
 	conn := p.store.GetUserConnection(userID)

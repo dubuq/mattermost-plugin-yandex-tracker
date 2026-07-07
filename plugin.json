@@ -29,7 +29,7 @@
         "key": "TrackerToken",
         "display_name": "Yandex Tracker Token",
         "type": "text",
-        "help_text": "IAM token or OAuth token for Yandex Tracker API access.",
+        "help_text": "Read-only service token (IAM or OAuth) for Yandex Tracker. Grant only tracker:read — this token is used solely to read issues for cards and never performs writes. All write actions run under each user's own connection.",
         "placeholder": "y0_...",
         "secret": true
       },

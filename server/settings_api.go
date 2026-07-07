@@ -8,7 +8,7 @@ import (
 )
 
 // handleWebhookURL returns the full webhook URL for display in the System Console.
-func (p *Plugin) handleWebhookURL(w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) handleWebhookURL(w http.ResponseWriter, _ *http.Request, _ string) {
 	siteURL := ""
 	if cfg := p.API.GetConfig(); cfg.ServiceSettings.SiteURL != nil {
 		siteURL = strings.TrimRight(*cfg.ServiceSettings.SiteURL, "/")
@@ -19,7 +19,7 @@ func (p *Plugin) handleWebhookURL(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleVerify tests credentials by calling the tracker /myself endpoint.
-func (p *Plugin) handleVerify(w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) handleVerify(w http.ResponseWriter, _ *http.Request, _ string) {
 	if !p.isConfigured() {
 		respondJSON(w, map[string]interface{}{
 			"ok":    false,
@@ -37,7 +37,7 @@ func (p *Plugin) handleVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleClearCache deletes all post-related KV entries while preserving subscriptions and user logins.
-func (p *Plugin) handleClearCache(w http.ResponseWriter, r *http.Request) {
+func (p *Plugin) handleClearCache(w http.ResponseWriter, r *http.Request, _ string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return

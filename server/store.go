@@ -4,8 +4,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -13,6 +15,12 @@ import (
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/dubuq/mattermost-plugin-yandex-tracker/server/tracker"
 )
+
+// encryptionKeyEnv, when set to a 64-char hex string (32 bytes), supplies the
+// AES key for user-token encryption from the server environment instead of the
+// KV store. This keeps the key out of the same store as the ciphertext it
+// protects. Unset/invalid falls back to the KV-managed key for compatibility.
+const encryptionKeyEnv = "YANDEX_TRACKER_TOKEN_KEY"
 
 const (
 	kvPrefixIssue         = "issue:"
@@ -67,9 +75,19 @@ func NewStore(api plugin.API) *Store {
 // protects, so an attacker with read access to the plugin KV store can decrypt
 // tokens. Encryption here defends against exposure paths that don't include KV
 // reads — e.g. raw DB backups filtered to the token rows, or logs — not against
-// a full KV compromise. Separating the key (e.g. deriving it from a server-held
-// secret) would harden this further.
+// a full KV compromise. Set the YANDEX_TRACKER_TOKEN_KEY environment variable to
+// hold the key outside the KV store and close that gap.
 func (s *Store) loadEncryptionKey() error {
+	// Prefer a server-held key so it does not live alongside the ciphertext.
+	if env := strings.TrimSpace(os.Getenv(encryptionKeyEnv)); env != "" {
+		key, err := hex.DecodeString(env)
+		if err == nil && len(key) == 32 {
+			s.encryptionKey = key
+			return nil
+		}
+		s.api.LogWarn(encryptionKeyEnv + " is set but is not a 64-char hex (32-byte) key — falling back to the KV-stored key")
+	}
+
 	data, appErr := s.api.KVGet(kvKeyEncryptionKey)
 	if appErr != nil {
 		return fmt.Errorf("KVGet: %s", appErr.Error())
@@ -343,57 +361,96 @@ func (s *Store) GetSubscribedChannels(queueKey string) ([]string, error) {
 	return channels, nil
 }
 
-// AddSubscription subscribes channelID to queueKey. Idempotent.
-func (s *Store) AddSubscription(channelID, queueKey string) error {
-	channels, err := s.GetSubscribedChannels(queueKey)
-	if err != nil {
-		return err
-	}
-	for _, c := range channels {
-		if c == channelID {
-			return nil // already subscribed
+// casUpdate performs an atomic read-modify-write on key. transform receives the
+// current raw value (nil when absent) and returns the next value; a nil return
+// deletes the key. Uses KVCompareAndSet/Delete and retries on a lost race so
+// concurrent updates cannot clobber each other.
+func (s *Store) casUpdate(key string, transform func(old []byte) ([]byte, error)) error {
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		old, appErr := s.api.KVGet(key)
+		if appErr != nil {
+			return fmt.Errorf("KVGet: %s", appErr.Error())
+		}
+		next, err := transform(old)
+		if err != nil {
+			return err
+		}
+		if next == nil {
+			if old == nil {
+				return nil
+			}
+			ok, appErr := s.api.KVCompareAndDelete(key, old)
+			if appErr != nil {
+				return fmt.Errorf("KVCompareAndDelete: %s", appErr.Error())
+			}
+			if ok {
+				return nil
+			}
+			continue // raced — retry
+		}
+		ok, appErr := s.api.KVCompareAndSet(key, old, next)
+		if appErr != nil {
+			return fmt.Errorf("KVCompareAndSet: %s", appErr.Error())
+		}
+		if ok {
+			return nil
 		}
 	}
-	channels = append(channels, channelID)
-	if len(channels) > subscriptionsCap {
-		channels = channels[len(channels)-subscriptionsCap:]
-	}
-	data, err := json.Marshal(channels)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if appErr := s.api.KVSet(kvPrefixSubscription+queueKey, data); appErr != nil {
-		return fmt.Errorf("KVSet: %s", appErr.Error())
-	}
-	return nil
+	return fmt.Errorf("casUpdate: exhausted retries for key %s", key)
 }
 
-// RemoveSubscription unsubscribes channelID from queueKey. No-op if not subscribed.
+// AddSubscription subscribes channelID to queueKey. Idempotent and atomic.
+func (s *Store) AddSubscription(channelID, queueKey string) error {
+	return s.casUpdate(kvPrefixSubscription+queueKey, func(old []byte) ([]byte, error) {
+		var channels []string
+		if len(old) > 0 {
+			if err := json.Unmarshal(old, &channels); err != nil {
+				return nil, fmt.Errorf("unmarshal: %w", err)
+			}
+		}
+		for _, c := range channels {
+			if c == channelID {
+				return old, nil // already subscribed — no change
+			}
+		}
+		channels = append(channels, channelID)
+		if len(channels) > subscriptionsCap {
+			channels = channels[len(channels)-subscriptionsCap:]
+		}
+		data, err := json.Marshal(channels)
+		if err != nil {
+			return nil, fmt.Errorf("marshal: %w", err)
+		}
+		return data, nil
+	})
+}
+
+// RemoveSubscription unsubscribes channelID from queueKey. No-op if not subscribed. Atomic.
 func (s *Store) RemoveSubscription(channelID, queueKey string) error {
-	channels, err := s.GetSubscribedChannels(queueKey)
-	if err != nil {
-		return err
-	}
-	filtered := channels[:0]
-	for _, c := range channels {
-		if c != channelID {
-			filtered = append(filtered, c)
+	return s.casUpdate(kvPrefixSubscription+queueKey, func(old []byte) ([]byte, error) {
+		if len(old) == 0 {
+			return nil, nil
 		}
-	}
-	if len(filtered) == 0 {
-		if appErr := s.api.KVDelete(kvPrefixSubscription + queueKey); appErr != nil {
-			return fmt.Errorf("KVDelete: %s", appErr.Error())
+		var channels []string
+		if err := json.Unmarshal(old, &channels); err != nil {
+			return nil, fmt.Errorf("unmarshal: %w", err)
 		}
-		return nil
-	}
-	data, err := json.Marshal(filtered)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	if appErr := s.api.KVSet(kvPrefixSubscription+queueKey, data); appErr != nil {
-		return fmt.Errorf("KVSet: %s", appErr.Error())
-	}
-	return nil
+		filtered := channels[:0]
+		for _, c := range channels {
+			if c != channelID {
+				filtered = append(filtered, c)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, nil // delete the key
+		}
+		data, err := json.Marshal(filtered)
+		if err != nil {
+			return nil, fmt.Errorf("marshal: %w", err)
+		}
+		return data, nil
+	})
 }
 
 // GetChannelQueues returns all queue keys that channelID is subscribed to.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
@@ -43,10 +44,21 @@ type Plugin struct {
 	refreshMu     sync.Mutex
 	refreshCancel context.CancelFunc
 
-	// oauthMu serializes per-user token refreshes so concurrent actions from
-	// the same user don't race a refresh_token exchange (Yandex invalidates
-	// the old refresh token once used).
-	oauthMu sync.Mutex
+	// oauthLocks holds one mutex per user ID so concurrent actions from the same
+	// user don't race a refresh_token exchange (Yandex invalidates the old refresh
+	// token once used), while different users never contend on a shared lock.
+	oauthLocks sync.Map // userID -> *sync.Mutex
+
+	// actionLimiter bounds interactive requests per user; webhookLimiter bounds
+	// webhook requests per source IP. Both defend against floods / DoS.
+	actionLimiter  *rateLimiter
+	webhookLimiter *rateLimiter
+}
+
+// userOAuthLock returns the per-user refresh mutex, creating it on first use.
+func (p *Plugin) userOAuthLock(userID string) *sync.Mutex {
+	m, _ := p.oauthLocks.LoadOrStore(userID, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 func (p *Plugin) OnActivate() error {
@@ -54,6 +66,11 @@ func (p *Plugin) OnActivate() error {
 	// OnConfigurationChange so goroutines started by config change are safe.
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.updateCh = make(chan updateJob, 64)
+
+	// Generous ceilings: normal card interaction stays well under these; they
+	// exist to cap abuse, not to throttle ordinary use.
+	p.actionLimiter = newRateLimiter(60, time.Minute)
+	p.webhookLimiter = newRateLimiter(120, time.Minute)
 
 	if err := p.OnConfigurationChange(); err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)

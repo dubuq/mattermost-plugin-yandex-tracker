@@ -77,7 +77,7 @@ Posts an ephemeral preview card for any issue (only visible to you).
 
 1. Go to [oauth.yandex.ru](https://oauth.yandex.ru) and create an application
 2. Under **Platforms**, tick **Web services** and set the callback URL to `https://oauth.yandex.ru/verification_code`
-3. Under **Access**, enable `tracker:read` and `tracker:write` under **Yandex.Tracker**
+3. Under **Access**, enable **only** `tracker:read` under **Yandex.Tracker**. This is the plugin's service token and is used solely for reading issues to render cards — it never performs writes. Do **not** grant `tracker:write` here; all write actions (assign, status changes, comments, field updates) run under each user's own connection (see [Per-user OAuth app](#per-user-oauth-app-for-write-actions)).
 4. Save the app and copy the **Client ID**
 5. Open the following URL in your browser and authorize:
    ```
@@ -157,13 +157,28 @@ With **Monitor All Channels** disabled (recommended), the plugin only monitors c
 
 ### 5. Set up webhooks
 
-The webhook URL is shown in **System Console → Plugins → Yandex Tracker**. In Yandex Tracker, create a trigger for each event type you want:
+The webhook URL is shown in **System Console → Plugins → Yandex Tracker**. In Yandex Tracker, create a trigger per queue for each event type you want. Every trigger's **HTTP action** uses the same settings:
 
-**Status change** (updates the card in place):
+- **Method:** `POST` (not GET — the plugin only accepts POST)
+- **Address:** the webhook URL above
+- **Authorization:** `NoAuth` (the plugin authenticates via the header below, not OAuth)
+- **Body:** `application/json`, one of the payloads below
+- **Headers:** `X-Webhook-Secret: <your secret>` and `Content-Type: application/json`
+  (the secret must exactly match the **Webhook Secret** in the plugin settings — a mismatch or missing header returns `401`)
+
+#### Card refresh — the important one
+
+**`issueUpdated` re-fetches the issue and rebuilds the whole card** (status, assignee, priority, type). This is how the card stays in sync, so its trigger **condition** matters:
 
 ```json
 { "key": "{{issue.key}}", "type": "issueUpdated" }
 ```
+
+Set the trigger to fire when **any** field shown on the card changes. In the trigger's **conditions** ("При условии"), add each card field — Status, Assignee, Type, Priority — with "value changed" ("Значение поля изменилось"), and set the group operator to **OR (`ИЛИ`)**:
+
+> ⚠️ **Use `ИЛИ` (OR), not `И` (AND).** The default is `И`, which only fires when *all* those fields change at once — i.e. never. Switch the operator to `ИЛИ` so the trigger fires when any one of them changes. (Alternatively, leave the conditions empty to fire on every change.)
+
+This single broad `issueUpdated` trigger is what gives you "any field change → card refresh". The triggers below are optional **notification** add-ons layered on top — they post a message in the thread but do **not** refresh the card:
 
 **New comment** (bot replies in the issue thread):
 
@@ -190,8 +205,6 @@ The webhook URL is shown in **System Console → Plugins → Yandex Tracker**. I
 ```json
 { "key": "{{issue.key}}", "type": "issueCreated" }
 ```
-
-Set `Content-Type: application/json` and `X-Webhook-Secret: <your secret>` as headers on each trigger.
 
 ---
 
@@ -366,7 +379,7 @@ To release:
 
 1. Зайдите на [oauth.yandex.ru](https://oauth.yandex.ru) под этим аккаунтом → "Создать приложение".
 2. В разделе "Платформы" выберите "Веб-сервисы", Callback URI: `https://oauth.yandex.ru/verification_code`
-3. В разделе "Доступы" → "Яндекс.Трекер" включите `tracker:read` и `tracker:write`.
+3. В разделе "Доступы" → "Яндекс.Трекер" включите **только** `tracker:read`. Это сервисный токен, он используется исключительно для чтения задач и никогда не выполняет запись. `tracker:write` здесь давать не нужно — все действия (назначение, смена статуса, комментарии, поля) выполняются от имени самого сотрудника (см. Часть 2).
 4. Сохраните и скопируйте ClientID приложения.
 5. Откройте в браузере (подставив ClientID из шага 4) и нажмите "Разрешить": `https://oauth.yandex.ru/authorize?response_type=token&client_id=CLIENT_ID_ИЗ_ШАГА_4`
 6. После редиректа в адресной строке будет `access_token=y0_AgAA...` - скопируйте это значение. Это токен для чтения, действует 1 год.
@@ -408,9 +421,30 @@ System Console → Plugins → Yandex Tracker, заполните поля:
 
 ### Часть 6. Триггеры в Яндекс.Трекере
 
-Требуются права администратора очереди. В настройках очереди → "Триггеры" создайте HTTP-триггеры на адрес `https://YOUR-MATTERMOST-SERVER/plugins/com.yandex-tracker-mattermost/webhook` с заголовками `Content-Type: application/json` и `X-Webhook-Secret: <секрет из части 4>` - по одному на каждое событие:
+Требуются права администратора очереди. В настройках очереди → "Триггеры" создайте HTTP-триггеры на адрес `https://YOUR-MATTERMOST-SERVER/plugins/com.yandex-tracker-mattermost/webhook`. У каждого триггера в блоке "Выполнить действие" настройте HTTP-запрос одинаково:
 
-- Изменение задачи: `{ "key": "{{issue.key}}", "type": "issueUpdated" }`
+- **Метод:** `POST` (не GET — плагин принимает только POST)
+- **Способ авторизации:** `NoAuth` (плагин проверяет секрет через заголовок ниже, а не через OAuth)
+- **Тело запроса:** `application/json`, одно из значений ниже
+- **Заголовки:** `X-Webhook-Secret: <секрет из части 4>` и `Content-Type: application/json`
+  (секрет должен точно совпадать со значением "Webhook Secret" в настройках плагина — при несовпадении или отсутствии заголовка вернётся `401`)
+
+#### Обновление карточки — главный триггер
+
+**`issueUpdated` заново запрашивает задачу и перестраивает всю карточку** (статус, исполнитель, приоритет, тип). Именно так карточка остаётся актуальной, поэтому важны **условия** запуска триггера:
+
+```json
+{ "key": "{{issue.key}}", "type": "issueUpdated" }
+```
+
+Настройте триггер срабатывать при изменении **любого** поля с карточки. В блоке "При условии" добавьте поля карточки — Статус, Исполнитель, Тип, Приоритет — со значением "Значение поля изменилось" и переключите оператор группы на **`ИЛИ`**:
+
+> ⚠️ **Используйте `ИЛИ`, а не `И`.** По умолчанию стоит `И` — тогда триггер сработает, только если *все* поля изменятся одновременно, то есть практически никогда. Переключите оператор на `ИЛИ`, чтобы триггер срабатывал при изменении любого из полей. (Либо оставьте условия пустыми — тогда триггер срабатывает на любое изменение.)
+
+![Настройка триггера issueUpdated в Яндекс.Трекере](assets/trigger-setup-ru.png)
+
+Этот один широкий триггер `issueUpdated` и даёт поведение "изменилось любое поле → карточка обновилась". Триггеры ниже — необязательные **уведомления** поверх него: они пишут сообщение в тред, но карточку **не** обновляют:
+
 - Новый комментарий: `{ "key": "{{issue.key}}", "type": "commentCreated", "author": "{{comment.author.display}}" }`
 - Смена исполнителя: `{ "key": "{{issue.key}}", "type": "issueAssigned", "assignee": "{{issue.assignee.display}}" }`
 - Создание задачи (для подписок `/tracker subscribe`): `{ "key": "{{issue.key}}", "type": "issueCreated" }`

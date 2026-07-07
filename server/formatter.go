@@ -2,10 +2,43 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/dubuq/mattermost-plugin-yandex-tracker/server/tracker"
 )
+
+// markdownEscaper neutralises the characters Mattermost interprets as markdown
+// so externally-controlled text (issue summaries, author/assignee names from
+// Tracker or webhooks) renders literally and cannot inject links, images,
+// mentions, or table/formatting control characters.
+var markdownEscaper = strings.NewReplacer(
+	"\\", "\\\\",
+	"`", "\\`",
+	"*", "\\*",
+	"_", "\\_",
+	"{", "\\{",
+	"}", "\\}",
+	"[", "\\[",
+	"]", "\\]",
+	"(", "\\(",
+	")", "\\)",
+	"#", "\\#",
+	"+", "\\+",
+	"-", "\\-",
+	".", "\\.",
+	"!", "\\!",
+	"|", "\\|",
+	"~", "\\~",
+	">", "\\>",
+	"<", "\\<",
+	"&", "\\&",
+)
+
+// escapeMarkdown returns s with markdown control characters escaped.
+func escapeMarkdown(s string) string {
+	return markdownEscaper.Replace(s)
+}
 
 // StatusColors holds the sidebar colors for each status group. Defaults are in configuration.go.
 type StatusColors struct {
@@ -40,6 +73,8 @@ func (f *Formatter) BuildAttachment(issue *tracker.Issue, sidebarColor string, t
 	assignee := issue.Assignee
 	if assignee == "" {
 		assignee = emptyFieldValue
+	} else {
+		assignee = escapeMarkdown(assignee)
 	}
 
 	fields := []*model.SlackAttachmentField{
@@ -119,7 +154,7 @@ func (f *Formatter) BuildAttachment(issue *tracker.Issue, sidebarColor string, t
 
 	return &model.SlackAttachment{
 		Color:     sidebarColor,
-		Title:     fmt.Sprintf("%s: %s", issue.Key, issue.Summary),
+		Title:     fmt.Sprintf("%s: %s", issue.Key, escapeMarkdown(issue.Summary)),
 		TitleLink: issue.URL,
 		Fields:    fields,
 		Actions:   actions,

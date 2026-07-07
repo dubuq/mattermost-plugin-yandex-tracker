@@ -213,7 +213,7 @@ func (p *Plugin) OnConfigurationChange() error {
 	}
 
 	if cfg.WebhookSecret == "" {
-		p.API.LogWarn("WebhookSecret is not set — webhook endpoint accepts all requests. Set a secret before going to production.")
+		p.API.LogWarn("WebhookSecret is not set — the webhook endpoint rejects all requests until a secret is configured here and in Yandex Tracker.")
 	}
 
 	return nil

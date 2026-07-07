@@ -4,12 +4,22 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/dubuq/mattermost-plugin-yandex-tracker/server/tracker"
 )
+
+// sourceIP returns the remote host of the request without the port, used as the
+// webhook rate-limit key.
+func sourceIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
 
 // updateJob is a request to rebuild and update one or more post cards for an issue.
 type updateJob struct {
@@ -124,6 +134,13 @@ func (p *Plugin) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-source rate limit before any work, so an unauthenticated flood is cheap
+	// to shed. Keyed by remote host (strip the port).
+	if !p.webhookLimiter.allow(sourceIP(r)) {
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+
 	// 401 on bad secret signals misconfiguration rather than a retriable error.
 	if !p.validateWebhookSecret(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -138,8 +155,8 @@ func (p *Plugin) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if event.Key == "" {
-		p.API.LogWarn("webhook: received event with no issue key")
+	if !validIssueKey(event.Key) {
+		p.API.LogWarn("webhook: received event with missing or malformed issue key")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -268,7 +285,12 @@ func (p *Plugin) handleIssueCreated(issueKey string) {
 		return
 	}
 
-	issue, err := p.getTrackerClient().GetIssue(tracker.ContextWithLocale(p.ctx, p.serverLocale()), issueKey)
+	client := p.getTrackerClient()
+	if client == nil {
+		p.API.LogWarn("handleIssueCreated: tracker client not configured, skipping", "key", issueKey)
+		return
+	}
+	issue, err := client.GetIssue(tracker.ContextWithLocale(p.ctx, p.serverLocale()), issueKey)
 	if err != nil {
 		p.API.LogError("webhook: failed to fetch new issue", "key", issueKey, "err", err.Error())
 		return
@@ -322,7 +344,7 @@ func (p *Plugin) handleCommentNotification(issueKey, author, comment string) {
 	}
 
 	t := p.translations()
-	msg := fmt.Sprintf(t.CommentNotification, issueKey, author)
+	msg := fmt.Sprintf(t.CommentNotification, issueKey, escapeMarkdown(author))
 
 	for _, ip := range issuePosts {
 		post := &model.Post{
@@ -357,7 +379,7 @@ func (p *Plugin) handleAssignmentNotification(issueKey, assignee string) {
 	}
 
 	t := p.translations()
-	msg := fmt.Sprintf(t.AssignmentNotification, issueKey, assignee)
+	msg := fmt.Sprintf(t.AssignmentNotification, issueKey, escapeMarkdown(assignee))
 
 	for _, ip := range issuePosts {
 		post := &model.Post{
@@ -375,11 +397,13 @@ func (p *Plugin) handleAssignmentNotification(issueKey, assignee string) {
 }
 
 // validateWebhookSecret does a constant-time compare of X-Webhook-Secret.
-// An empty configured secret accepts all requests.
+// Fails closed: an unconfigured secret rejects all requests so the plugin never
+// silently accepts unsigned webhook traffic.
 func (p *Plugin) validateWebhookSecret(r *http.Request) bool {
 	secret := p.getConfiguration().WebhookSecret
 	if secret == "" {
-		return true
+		p.API.LogWarn("webhook: rejected — WebhookSecret is not configured; set it in the plugin settings and in Yandex Tracker")
+		return false
 	}
 	provided := r.Header.Get("X-Webhook-Secret")
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) == 1

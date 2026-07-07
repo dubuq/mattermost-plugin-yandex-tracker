@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -68,16 +70,9 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Myself returns the Tracker login of the token owner via GET /myself.
 func (c *Client) Myself(ctx context.Context) (string, error) {
-	url := c.apiBase + "/myself"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := c.send(ctx, http.MethodGet, c.apiBase+"/myself", nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
-	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -104,19 +99,11 @@ func (c *Client) Myself(ctx context.Context) (string, error) {
 
 // GetIssue fetches a single issue by its key (e.g. "PROJECT-123").
 func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, error) {
-	url := fmt.Sprintf("%s/issues/%s", c.apiBase, key)
+	url := fmt.Sprintf("%s/issues/%s", c.apiBase, url.PathEscape(key))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	resp, err := c.send(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-
-	// OAuth token prefix; use "Bearer" for IAM tokens instead.
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -136,16 +123,10 @@ func (c *Client) GetIssue(ctx context.Context, key string) (*tracker.Issue, erro
 }
 
 func (c *Client) GetTransitions(ctx context.Context, key string) ([]tracker.Transition, error) {
-	url := fmt.Sprintf("%s/issues/%s/transitions", c.apiBase, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL := fmt.Sprintf("%s/issues/%s/transitions", c.apiBase, url.PathEscape(key))
+	resp, err := c.send(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -173,7 +154,7 @@ func (c *Client) GetTransitions(ctx context.Context, key string) ([]tracker.Tran
 }
 
 func (c *Client) ExecuteTransition(ctx context.Context, key, transitionID string, fields map[string]interface{}) error {
-	url := fmt.Sprintf("%s/issues/%s/transitions/%s/_execute", c.apiBase, key, transitionID)
+	reqURL := fmt.Sprintf("%s/issues/%s/transitions/%s/_execute", c.apiBase, url.PathEscape(key), url.PathEscape(transitionID))
 
 	// Build request body: always a JSON object. Nil/empty fields → send "{}".
 	body := make(map[string]interface{}, len(fields))
@@ -182,15 +163,9 @@ func (c *Client) ExecuteTransition(ctx context.Context, key, transitionID string
 	}
 	bodyBytes, _ := json.Marshal(body)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(bodyBytes))
+	resp, err := c.send(ctx, http.MethodPost, reqURL, bodyBytes)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -213,16 +188,10 @@ func (c *Client) ExecuteTransition(ctx context.Context, key, transitionID string
 // AddComment posts a comment on an issue.
 func (c *Client) AddComment(ctx context.Context, key, text string) error {
 	body, _ := json.Marshal(map[string]string{"text": text})
-	url := fmt.Sprintf("%s/issues/%s/comments", c.apiBase, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
+	reqURL := fmt.Sprintf("%s/issues/%s/comments", c.apiBase, url.PathEscape(key))
+	resp, err := c.send(ctx, http.MethodPost, reqURL, body)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -244,16 +213,10 @@ func (c *Client) AddComment(ctx context.Context, key, text string) error {
 
 func (c *Client) AssignIssue(ctx context.Context, key, login string) error {
 	body, _ := json.Marshal(map[string]string{"assignee": login})
-	url := fmt.Sprintf("%s/issues/%s", c.apiBase, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewBuffer(body))
+	reqURL := fmt.Sprintf("%s/issues/%s", c.apiBase, url.PathEscape(key))
+	resp, err := c.send(ctx, http.MethodPatch, reqURL, body)
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -264,6 +227,85 @@ func (c *Client) AssignIssue(ctx context.Context, key, login string) error {
 		return fmt.Errorf("tracker API error: HTTP %d — check that the login is correct", resp.StatusCode)
 	}
 	return nil
+}
+
+// maxRetries bounds transient-failure retries so a struggling Tracker API can
+// never turn into an unbounded retry loop.
+const maxRetries = 2
+
+// send performs an HTTP request with the client's standard headers and retries
+// on transient failures — network errors, HTTP 429, and 5xx — using bounded
+// exponential backoff that honours a Retry-After header when present. body may
+// be nil (GET); it is re-read from the buffer on each attempt. Non-transient
+// responses (including 4xx like 401/403/404) are returned to the caller as-is.
+func (c *Client) send(ctx context.Context, method, reqURL string, body []byte) (*http.Response, error) {
+	backoff := 500 * time.Millisecond
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		var r io.Reader
+		if body != nil {
+			r = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, r)
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		switch {
+		case err != nil:
+			lastErr = fmt.Errorf("request failed: %w", err)
+		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+			wait := retryAfter(resp, backoff)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("tracker API error: HTTP %d", resp.StatusCode)
+			if attempt < maxRetries {
+				if !sleepCtx(ctx, wait) {
+					return nil, ctx.Err()
+				}
+				backoff *= 2
+				continue
+			}
+			return nil, lastErr
+		default:
+			return resp, nil
+		}
+		// Network error path.
+		if attempt >= maxRetries {
+			return nil, lastErr
+		}
+		if !sleepCtx(ctx, backoff) {
+			return nil, ctx.Err()
+		}
+		backoff *= 2
+	}
+}
+
+// retryAfter returns the delay before the next attempt, preferring the server's
+// Retry-After header (seconds) and falling back to the caller's backoff.
+func retryAfter(resp *http.Response, fallback time.Duration) time.Duration {
+	if v := resp.Header.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && secs > 0 {
+			if d := time.Duration(secs) * time.Second; d <= 30*time.Second {
+				return d
+			}
+			return 30 * time.Second
+		}
+	}
+	return fallback
+}
+
+// sleepCtx waits for d or until ctx is cancelled. Returns false if cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // setHeaders applies auth, org ID, and locale headers common to all requests.
